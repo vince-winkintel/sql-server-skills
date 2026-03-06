@@ -1,4 +1,5 @@
 .DS_Store
+claude-skill.zip
 *.bak
 *.log
 node_modules/

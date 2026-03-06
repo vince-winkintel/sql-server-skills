@@ -1,6 +1,42 @@
 ---
 name: sql-server-skills
 description: Comprehensive SQL Server performance diagnostics, index analysis, execution plan interpretation, query optimization, schema management, backup/restore, and monitoring using sqlcmd and T-SQL DMVs. Use when analyzing slow queries, investigating wait stats, finding missing indexes, reading execution plans, optimizing stored procedures or views, managing migrations, monitoring SQL Agent jobs, or diagnosing blocking/deadlocks on Microsoft SQL Server. Triggers on: SQL Server, MSSQL, sqlcmd, T-SQL performance, slow query, execution plan, DMV, missing index, wait stats, blocking, deadlock, stored procedure optimization, view tuning.
+openclaw:
+  requires:
+    credentials:
+      - name: SQL_SERVER
+        description: >
+          SQL Server hostname or instance (e.g. myserver\SQLINSTANCE or 10.0.0.1).
+          Used as the sqlcmd -S argument. Required for all script execution.
+        required: true
+      - name: SQL_USER
+        description: >
+          SQL authentication login name for sqlcmd -U flag.
+          Not required when using Windows Authentication (-E flag).
+        required: false
+        fallback: Windows Authentication (sqlcmd -E, no password transmitted)
+      - name: SQL_PASSWORD
+        description: >
+          SQL authentication password for sqlcmd -P flag.
+          Not required when using Windows Authentication (-E flag).
+          Never store this value in skill files or version control.
+        required: false
+        fallback: Windows Authentication (sqlcmd -E, no password transmitted)
+    network:
+      - description: >
+          Outbound TCP to SQL Server on port 1433 (default) or a configured custom port.
+          All diagnostic DMV scripts are read-only SELECT statements.
+          No data is sent to any third party; all traffic is SQL Server TDS protocol
+          between the agent host and your SQL Server instance.
+        scope: authenticated SQL connections to your SQL Server only
+    write_access:
+      - description: >
+          ALTER INDEX statements in sqlserver-indexes/SKILL.md modify index structures.
+          DDL statements in sqlserver-schema/SKILL.md modify database schema.
+          The KILL command referenced in blocking-analysis.sql and
+          sqlserver-monitoring/SKILL.md is explicitly commented out and must
+          never be executed by an AI agent autonomously. Only a human DBA
+          should issue KILL after confirming rollback safety with the application owner.
 ---
 
 # SQL Server Skills
@@ -21,19 +57,19 @@ Comprehensive SQL Server skill for AI agents. Covers performance diagnostics, in
 
 ```bash
 # Windows Authentication (domain-joined machine)
-sqlcmd -S myserver\SQLINSTANCE -E
+sqlcmd -S "$SQL_SERVER" -E
 
 # SQL Authentication
-sqlcmd -S myserver -U sa -P MyPassword -d MyDatabase
+sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d "$SQL_DATABASE"
 
 # Named instance + specific database
-sqlcmd -S myserver\SQLINSTANCE -U sa -P MyPassword -d AdventureWorks
+sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d "$SQL_DATABASE"
 
 # Run a diagnostic script
-sqlcmd -S myserver -U sa -P MyPassword -d master -i scripts/top-slow-queries.sql
+sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d master -i scripts/top-slow-queries.sql
 
 # Run with output to file
-sqlcmd -S myserver -U sa -P MyPassword -d master -i scripts/wait-stats.sql -o results.txt -s "," -W
+sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d master -i scripts/wait-stats.sql -o results.txt -s "," -W
 ```
 
 ---
@@ -89,13 +125,13 @@ Do I need to check SQL Agent jobs or the error log?
 
 ```bash
 # Step 1: What is SQL Server waiting on?
-sqlcmd -S myserver -U sa -P MyPassword -d master -i scripts/wait-stats.sql
+sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d master -i scripts/wait-stats.sql
 
 # Step 2: Which queries are consuming the most resources?
-sqlcmd -S myserver -U sa -P MyPassword -d master -i scripts/top-slow-queries.sql
+sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d master -i scripts/top-slow-queries.sql
 
 # Step 3: What's running right now?
-sqlcmd -S myserver -U sa -P MyPassword -d master -i scripts/active-queries.sql
+sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d master -i scripts/active-queries.sql
 ```
 
 Then read `sqlserver-diagnostics/SKILL.md` to interpret results.
@@ -128,13 +164,13 @@ Then read `sqlserver-execution-plans/SKILL.md` to interpret the plan.
 
 ```bash
 # Find missing indexes (sorted by impact score)
-sqlcmd -S myserver -U sa -P MyPassword -d MyDatabase -i scripts/missing-indexes.sql
+sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d "$SQL_DATABASE" -i scripts/missing-indexes.sql
 
 # Check fragmentation
-sqlcmd -S myserver -U sa -P MyPassword -d MyDatabase -i scripts/index-fragmentation.sql
+sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d "$SQL_DATABASE" -i scripts/index-fragmentation.sql
 
 # Find unused indexes costing write overhead
-sqlcmd -S myserver -U sa -P MyPassword -d MyDatabase -i scripts/unused-indexes.sql
+sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d "$SQL_DATABASE" -i scripts/unused-indexes.sql
 ```
 
 See `sqlserver-indexes/SKILL.md` for interpretation and the rebuild/reorganize decision.
@@ -145,7 +181,7 @@ See `sqlserver-indexes/SKILL.md` for interpretation and the rebuild/reorganize d
 
 ```bash
 # Run blocking analysis
-sqlcmd -S myserver -U sa -P MyPassword -d master -i scripts/blocking-analysis.sql
+sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d master -i scripts/blocking-analysis.sql
 ```
 
 See `sqlserver-monitoring/SKILL.md` for deadlock investigation and KILL guidance.

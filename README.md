@@ -80,9 +80,18 @@ git clone https://github.com/vince-winkintel/sql-server-skills.git
 
 Then reference in your agent's `SKILL.md` search path.
 
-### Option 3: Claude.ai / zip upload
+### Option 3: Claude.ai (Organization Skills)
 
-Download the repository as a ZIP and upload to your Claude.ai project context.
+Claude.ai requires a zip containing exactly one `SKILL.md`. Download the pre-built `claude-skill.zip` from the [latest release](https://github.com/vince-winkintel/sql-server-skills/releases/latest) and upload it in your organization's **Settings → Custom Skills**.
+
+The zip contains a single merged `SKILL.md` combining all 7 sub-skills into one comprehensive SQL Server reference.
+
+**Build it yourself:**
+
+```bash
+bash scripts/build-claude-skill.sh
+# Output: ./claude-skill.zip
+```
 
 ---
 
@@ -90,10 +99,10 @@ Download the repository as a ZIP and upload to your Claude.ai project context.
 
 ```bash
 # Connect and run a script
-sqlcmd -S myserver -U sa -P MyPassword -d master -i scripts/wait-stats.sql
+sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d master -i scripts/wait-stats.sql
 
 # Run with CSV output to a file
-sqlcmd -S myserver -U sa -P MyPassword -d master \
+sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d master \
   -i scripts/top-slow-queries.sql -o results.txt -s "," -W
 ```
 
