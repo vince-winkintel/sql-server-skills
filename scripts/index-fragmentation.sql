@@ -15,6 +15,11 @@
 -- plan. Never automatically execute returned SQL. Capture index definitions before
 -- changes; budget locks, transaction log, disk/tempdb capacity and a maintenance window.
 -- Check ONLINE support for the edition and index type; online operations still take locks.
+-- Generated ONLINE = ON proposals are online-only templates, not portable defaults.
+-- Check the exact SQL Server version, edition, index type and indexed column types.
+-- EngineEdition alone does not establish eligibility. Do not remove ONLINE = ON to retry
+-- an unsupported operation. Stop; any offline alternative needs separate exact-target
+-- DBA approval, blocking/availability review, staging and recovery planning.
 -- Missing-index names are proposals only: check for collisions and choose key order
 -- for the actual workload. Catalog visibility may be limited; NULL output is not approval.
 

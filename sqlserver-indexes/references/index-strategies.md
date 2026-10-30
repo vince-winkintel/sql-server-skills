@@ -106,6 +106,12 @@ recovery capacity and a staging trial. Check ONLINE support for the edition and
 index type; online operations still take locks. Budget log, disk and tempdb space
 and a maintenance window. Never automatically execute these returned statements.
 
+Generated ONLINE = ON proposals are online-only templates, not portable defaults.
+Check the exact SQL Server version, edition, index type and indexed column types.
+EngineEdition alone does not establish eligibility. Do not remove ONLINE = ON to retry
+an unsupported operation. Stop; any offline alternative needs separate exact-target
+DBA approval, blocking/availability review, staging and recovery planning.
+
 ```sql
 -- Propose rebuilds only; one row per index, no executable batch
 SELECT DISTINCT

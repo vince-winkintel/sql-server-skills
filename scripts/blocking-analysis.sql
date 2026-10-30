@@ -6,9 +6,8 @@
 -- Target:   SQL Server 2016+
 -- Usage:    sqlcmd -S <server> -E -d master -i blocking-analysis.sql
 --
--- ⚠️  NEVER issue KILL commands autonomously. Only kill a session
---     after confirming with the application owner that it is safe
---     to terminate and roll back that session's transaction.
+-- ⚠️  Only a human DBA issues KILL; agents and automated processes never do.
+--     A human DBA must confirm rollback safety with the application owner.
 -- ============================================================
 
 
@@ -166,7 +165,8 @@ ORDER BY
 --
 --   -- KILL <session_id>;   ← Replace with actual session_id from Part 2
 --
---   Only a DBA may act after exact-target review and application-owner approval.
+--   Only a human DBA issues KILL; agents and automated processes never do.
+--   A human DBA must obtain exact-target review and application-owner approval.
 --   Recheck login, host, program, transaction and connection start time immediately before
 --   acting: session IDs can be reused. Never target system sessions. Prefer waiting or
 --   application-level cancellation when safe. Use least privilege: ALTER ANY CONNECTION
@@ -181,3 +181,13 @@ ORDER BY
 --   - Review isolation level (READ_COMMITTED_SNAPSHOT can eliminate many reader blocks)
 --   - Enable RCSI: ALTER DATABASE <db> SET READ_COMMITTED_SNAPSHOT ON;
 -- ============================================================
+
+-- Human DBA preflight only: replace NULL with the reviewed session ID.
+-- Confirm sys.dm_exec_sessions.is_user_process = 1; no row means stop.
+-- Recheck identity immediately before acting; this snapshot is not authorization.
+DECLARE @review_session_id smallint = NULL;
+SELECT session_id, is_user_process, login_name, host_name, program_name,
+       login_time, open_transaction_count
+FROM sys.dm_exec_sessions
+WHERE session_id = @review_session_id
+  AND is_user_process = 1;

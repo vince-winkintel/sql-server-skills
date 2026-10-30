@@ -5,3 +5,5 @@ SECURITY.md export-ignore
 .gitignore export-ignore
 .gitattributes export-ignore
 scripts/build-claude-skill.sh export-ignore
+docs/ export-ignore
+tests/ export-ignore

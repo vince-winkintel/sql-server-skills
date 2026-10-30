@@ -1,6 +1,6 @@
 ---
 name: sql-server-skills
-description: Comprehensive SQL Server performance diagnostics, index analysis, execution plan interpretation, query optimization, schema management, backup/restore, and monitoring using sqlcmd and T-SQL DMVs. Use when analyzing slow queries, investigating wait stats, finding missing indexes, reading execution plans, optimizing stored procedures or views, managing migrations, monitoring SQL Agent jobs, or diagnosing blocking/deadlocks on Microsoft SQL Server. Triggers on: SQL Server, MSSQL, sqlcmd, T-SQL performance, slow query, execution plan, DMV, missing index, wait stats, blocking, deadlock, stored procedure optimization, view tuning.
+description: "Comprehensive SQL Server performance diagnostics, index analysis, execution plan interpretation, query optimization, schema management, backup/restore, and monitoring using sqlcmd and T-SQL DMVs. Use when analyzing slow queries, investigating wait stats, finding missing indexes, reading execution plans, optimizing stored procedures or views, managing migrations, monitoring SQL Agent jobs, or diagnosing blocking/deadlocks on Microsoft SQL Server. Triggers on: SQL Server, MSSQL, sqlcmd, T-SQL performance, slow query, execution plan, DMV, missing index, wait stats, blocking, deadlock, stored procedure optimization, view tuning."
 openclaw:
   requires:
     credentials:
@@ -39,8 +39,8 @@ openclaw:
           staging validation and a tested recovery plan before changes.
           The KILL command referenced in blocking-analysis.sql and
           sqlserver-monitoring/SKILL.md is explicitly commented out and must
-          never be executed by an AI agent autonomously. Only a human DBA
-          should issue KILL after confirming rollback safety with the application owner.
+          never be executed by agents or automated processes, even with approval.
+          Only a human DBA issues KILL after confirming rollback safety with the application owner.
 ---
 
 # SQL Server Skills
@@ -65,22 +65,42 @@ never expand it into arguments. Never ask for, print, or persist passwords. Do n
 create password files, use shell tracing, or dump the environment. If no secure
 authentication is available, stop and let the operator configure it outside the agent.
 
+Choose exactly one authentication setup in the same Bash session as the workflows.
+The choice is explicit: a missing SQL password never falls back to another identity.
+
 ```bash
-# Windows Authentication (domain-joined machine)
-sqlcmd -S "$SQL_SERVER" -E
+# Integrated authentication: operator-configured identity
+SQL_AUTH=(-E)
+```
 
-# SQL Authentication: only with SQLCMDPASSWORD already securely provisioned
-sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -d "$SQL_DATABASE"
+```bash
+# SQL Authentication: SQLCMDPASSWORD must already be exported securely
+[ -n "${SQLCMDPASSWORD:-}" ] || { echo 'SQLCMDPASSWORD not provisioned or empty' >&2; exit 1; }
+SQL_AUTH=(-U "$SQL_USER")
+```
 
-# Named instance + specific database
-sqlcmd -S "$SQL_SERVER" -E -d "$SQL_DATABASE"
+```bash
+# Connect to the selected database using the chosen authentication
+sqlcmd -S "$SQL_SERVER" "${SQL_AUTH[@]:?Select authentication first}" -d "$SQL_DATABASE"
 
 # Run a diagnostic script
-sqlcmd -S "$SQL_SERVER" -E -d master -i scripts/top-slow-queries.sql
+sqlcmd -S "$SQL_SERVER" "${SQL_AUTH[@]:?Select authentication first}" -d master -i scripts/top-slow-queries.sql
 
 # Run with output to file
-sqlcmd -S "$SQL_SERVER" -E -d master -i scripts/wait-stats.sql -o results.txt -s "," -W
+sqlcmd -S "$SQL_SERVER" "${SQL_AUTH[@]:?Select authentication first}" -d master -i scripts/wait-stats.sql -o results.txt -s "," -W
 ```
+
+SQL authentication requires a nonempty, exported `SQLCMDPASSWORD` provisioned outside
+this agent session. If it is absent or empty, stop; never type a password into a prompt.
+Re-run the presence check before SQL-auth workflows if the environment has changed.
+
+### Compatibility
+
+The old `SQL_PASSWORD` credential name is replaced by `SQLCMDPASSWORD`. Operators must
+update secure environment provisioning outside the agent; the old variable is not read
+or copied. This is a breaking credential-name change. Integrated authentication needs
+no SQL password. The examples below reuse the chosen `SQL_AUTH` Bash array for either
+mode; do not switch identities silently.
 
 ---
 
@@ -135,13 +155,13 @@ Do I need to check SQL Agent jobs or the error log?
 
 ```bash
 # Step 1: What is SQL Server waiting on?
-sqlcmd -S "$SQL_SERVER" -E -d master -i scripts/wait-stats.sql
+sqlcmd -S "$SQL_SERVER" "${SQL_AUTH[@]:?Select authentication first}" -d master -i scripts/wait-stats.sql
 
 # Step 2: Which queries are consuming the most resources?
-sqlcmd -S "$SQL_SERVER" -E -d master -i scripts/top-slow-queries.sql
+sqlcmd -S "$SQL_SERVER" "${SQL_AUTH[@]:?Select authentication first}" -d master -i scripts/top-slow-queries.sql
 
 # Step 3: What's running right now?
-sqlcmd -S "$SQL_SERVER" -E -d master -i scripts/active-queries.sql
+sqlcmd -S "$SQL_SERVER" "${SQL_AUTH[@]:?Select authentication first}" -d master -i scripts/active-queries.sql
 ```
 
 Then read `sqlserver-diagnostics/SKILL.md` to interpret results.
@@ -174,14 +194,24 @@ Then read `sqlserver-execution-plans/SKILL.md` to interpret the plan.
 
 ```bash
 # Find missing indexes (sorted by impact score)
-sqlcmd -S "$SQL_SERVER" -E -d "$SQL_DATABASE" -i scripts/missing-indexes.sql
+sqlcmd -S "$SQL_SERVER" "${SQL_AUTH[@]:?Select authentication first}" -d "$SQL_DATABASE" -i scripts/missing-indexes.sql -b -y 0 -w 65535 || exit $?
 
 # Check fragmentation
-sqlcmd -S "$SQL_SERVER" -E -d "$SQL_DATABASE" -i scripts/index-fragmentation.sql
+sqlcmd -S "$SQL_SERVER" "${SQL_AUTH[@]:?Select authentication first}" -d "$SQL_DATABASE" -i scripts/index-fragmentation.sql
 
 # Find unused indexes costing write overhead
-sqlcmd -S "$SQL_SERVER" -E -d "$SQL_DATABASE" -i scripts/unused-indexes.sql
+sqlcmd -S "$SQL_SERVER" "${SQL_AUTH[@]:?Select authentication first}" -d "$SQL_DATABASE" -i scripts/unused-indexes.sql
 ```
+
+The missing-index XML aggregation cannot represent XML 1.0-invalid identifier
+characters (for example U+0001). Check the `-b` exit status: on any error, discard
+the entire report, including partial output, and stop for DBA investigation.
+
+Missing-index proposals retain `nvarchar(max)` for long column lists. Use `-y 0`
+to remove sqlcmd's default 256-character limit; `-w 65535` reduces line wrapping.
+Do not combine `-W` with `-y` or `-Y`. Unlimited display increases output cost;
+very long rows can still wrap. Inspect complete values in a suitable client and
+never execute a saved report as SQL. See [sqlcmd output options](https://learn.microsoft.com/en-us/sql/tools/sqlcmd/sqlcmd-utility#format-options).
 
 See `sqlserver-indexes/SKILL.md` for interpretation and the rebuild/reorganize decision.
 
@@ -191,10 +221,26 @@ See `sqlserver-indexes/SKILL.md` for interpretation and the rebuild/reorganize d
 
 ```bash
 # Run blocking analysis
-sqlcmd -S "$SQL_SERVER" -E -d master -i scripts/blocking-analysis.sql
+sqlcmd -S "$SQL_SERVER" "${SQL_AUTH[@]:?Select authentication first}" -d master -i scripts/blocking-analysis.sql
 ```
 
 See `sqlserver-monitoring/SKILL.md` for deadlock investigation and KILL guidance.
+
+Only a human DBA issues KILL; agents and automated processes never do.
+A human DBA must obtain exact-target and application-owner approval, review rollback
+safety, and recheck identity because session IDs can be reused.
+
+```sql
+-- Human DBA preflight only: replace NULL with the reviewed session ID.
+-- Confirm sys.dm_exec_sessions.is_user_process = 1; no row means stop.
+-- Recheck identity immediately before acting; this snapshot is not authorization.
+DECLARE @review_session_id smallint = NULL;
+SELECT session_id, is_user_process, login_name, host_name, program_name,
+       login_time, open_transaction_count
+FROM sys.dm_exec_sessions
+WHERE session_id = @review_session_id
+  AND is_user_process = 1;
+```
 
 ---
 

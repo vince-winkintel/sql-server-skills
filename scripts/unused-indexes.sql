@@ -21,6 +21,11 @@
 -- Missing-index names are proposals only: check for collisions and choose key order
 -- for the actual workload. Catalog visibility may be limited; NULL output is not approval.
 
+-- REVIEW-ONLY is an intentional non-SQL prefix: keep it in exported proposals.
+-- A human DBA must prepare a separate, reviewed statement before any DROP. Never run
+-- saved report output as a script or remove markers in bulk. Names may contain newlines;
+-- QUOTENAME preserves them, so identifiers must never be embedded in line comments.
+
 SELECT
     s.name                                                      AS schema_name,
     o.name                                                      AS table_name,
@@ -55,7 +60,7 @@ SELECT
        AND ic.is_included_column = 0)                          AS key_column_count,
 
     -- Proposal only: DBA must verify exact target, dependencies and recovery before use:
-    N'DROP INDEX ' + QUOTENAME(i.name) + N' ON ' + QUOTENAME(DB_NAME())
+    N'REVIEW-ONLY: DROP INDEX ' + QUOTENAME(i.name) + N' ON ' + QUOTENAME(DB_NAME())
         + N'.' + QUOTENAME(s.name) + N'.' + QUOTENAME(o.name) + N';'
                                                                 AS proposed_drop_statement
 

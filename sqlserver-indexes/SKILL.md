@@ -15,6 +15,13 @@ constraints, query hints and other dependencies, and test in staging with a reco
 plan. Never automatically execute returned SQL. Capture index definitions before
 changes; budget locks, transaction log, disk/tempdb capacity and a maintenance window.
 Check ONLINE support for the edition and index type; online operations still take locks.
+
+Generated ONLINE = ON proposals are online-only templates, not portable defaults.
+Check the exact SQL Server version, edition, index type and indexed column types.
+EngineEdition alone does not establish eligibility. Do not remove ONLINE = ON to retry
+an unsupported operation. Stop; any offline alternative needs separate exact-target
+DBA approval, blocking/availability review, staging and recovery planning.
+
 Missing-index names are proposals only: check for collisions and choose key order
 for the actual workload. Catalog visibility may be limited; NULL output is not approval.
 
@@ -23,6 +30,24 @@ for the actual workload. Catalog visibility may be limited; NULL output is not a
 SQL Server tracks index opportunities it identified during query execution in DMVs. These are not perfect recommendations — treat them as leads.
 
 **Script:** `../scripts/missing-indexes.sql`
+
+Keep nvarchar(max): valid proposals can exceed 4000 characters. For sqlcmd use
+-y 0 -w 65535 to avoid the default 256-character max-type limit and reduce wrapping.
+Do not combine -W with -y (or -Y). Unlimited display can increase output/network cost.
+Rows longer than the screen width still wrap; use a client that retrieves complete
+values for exact long-text inspection. Report output is data, never an input script.
+
+[sqlcmd display options](https://learn.microsoft.com/en-us/sql/tools/sqlcmd/sqlcmd-utility#format-options)
+
+XML 1.0 limitation: FOR XML PATH ... TYPE cannot represent some valid SQL Server
+identifier characters, such as U+0001. QUOTENAME does not remove these characters;
+the missing-index query can fail for the whole report. Use sqlcmd -b and check its
+exit status. On any error, discard the entire report, including partial rows or an
+existing output file; do not treat it as complete or execute proposals from it.
+Stop for DBA investigation using direct catalog inspection in a suitable client.
+Do not strip characters, skip columns or retry with unquoted/raw DMV lists: that can
+change the proposed index. This limitation is documented, not engine-tested here.
+See [FOR XML invalid characters](https://learn.microsoft.com/en-us/sql/relational-databases/xml/invalid-characters-and-escape-rules).
 
 ```sql
 SELECT TOP 20
@@ -69,7 +94,9 @@ SELECT TOP 20
         + N' (' + cols.key_columns + N')'
         + CASE WHEN cols.included_columns IS NOT NULL
                THEN N' INCLUDE (' + cols.included_columns + N')' ELSE N'' END
-        + N' WITH (ONLINE = ON);'                               AS suggested_create_index
+        + N' WITH (ONLINE = ON);'                               AS suggested_create_index,
+    N'ONLINE ONLY: verify edition and index-type support; no offline fallback'
+                                                                AS execution_requirement
 
 FROM sys.dm_db_missing_index_details mid
 JOIN sys.dm_db_missing_index_groups mig
@@ -179,7 +206,7 @@ ORDER BY ips.avg_fragmentation_in_percent DESC;
 |---------------|--------|-----|
 | < 10% | Skip | Not worth the overhead |
 | 10–30% | `REORGANIZE` | Online, incremental, low overhead |
-| > 30% | `REBUILD` | More thorough; use `ONLINE = ON` on Enterprise Edition |
+| > 30% | `REBUILD` | More thorough; verify ONLINE support for the exact edition, index and column types |
 
 **Notes:**
 - `REBUILD` updates its index statistics automatically; `REORGANIZE` does not. Review any separate `UPDATE STATISTICS` proposal under the local gates above; it is not an automatic follow-up.
@@ -193,6 +220,11 @@ ORDER BY ips.avg_fragmentation_in_percent DESC;
 Indexes that are never read but still incur write overhead on every INSERT/UPDATE/DELETE. Treat them as candidates requiring workload and constraint review.
 
 **Script:** `../scripts/unused-indexes.sql`
+
+REVIEW-ONLY is an intentional non-SQL prefix: keep it in exported proposals.
+A human DBA must prepare a separate, reviewed statement before any DROP. Never run
+saved report output as a script or remove markers in bulk. Names may contain newlines;
+QUOTENAME preserves them, so identifiers must never be embedded in line comments.
 
 ```sql
 SELECT
@@ -208,7 +240,7 @@ SELECT
     ius.last_user_scan,
     ius.last_user_lookup,
     -- Proposal only: exact-target DBA review, dependency checks and recovery plan required
-    N'DROP INDEX ' + QUOTENAME(i.name) + N' ON ' + QUOTENAME(DB_NAME())
+    N'REVIEW-ONLY: DROP INDEX ' + QUOTENAME(i.name) + N' ON ' + QUOTENAME(DB_NAME())
         + N'.' + QUOTENAME(s.name) + N'.' + QUOTENAME(o.name) + N';'
                             AS proposed_drop_statement
 FROM sys.dm_db_index_usage_stats ius
