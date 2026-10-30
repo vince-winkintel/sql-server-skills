@@ -14,14 +14,15 @@ openclaw:
           SQL authentication login name for sqlcmd -U flag.
           Not required when using Windows Authentication (-E flag).
         required: false
-        fallback: Windows Authentication (sqlcmd -E, no password transmitted)
-      - name: SQL_PASSWORD
+        fallback: Integrated authentication (sqlcmd -E, no SQL password required)
+      - name: SQLCMDPASSWORD
         description: >
-          SQL authentication password for sqlcmd -P flag.
+          SQL authentication password read directly by sqlcmd from the environment.
           Not required when using Windows Authentication (-E flag).
-          Never store this value in skill files or version control.
+          Must already be securely provisioned by the operator. Never ask for, print,
+          or persist this value, including in skill files, shell history or logs.
         required: false
-        fallback: Windows Authentication (sqlcmd -E, no password transmitted)
+        fallback: Integrated authentication (sqlcmd -E, no SQL password required)
     network:
       - description: >
           Outbound TCP to SQL Server on port 1433 (default) or a configured custom port.
@@ -33,6 +34,9 @@ openclaw:
       - description: >
           ALTER INDEX statements in sqlserver-indexes/SKILL.md modify index structures.
           DDL statements in sqlserver-schema/SKILL.md modify database schema.
+          Backup/restore, statistics updates and cache operations also have
+          operational impact; require exact-target DBA review, least privilege,
+          staging validation and a tested recovery plan before changes.
           The KILL command referenced in blocking-analysis.sql and
           sqlserver-monitoring/SKILL.md is explicitly commented out and must
           never be executed by an AI agent autonomously. Only a human DBA
@@ -49,27 +53,33 @@ Comprehensive SQL Server skill for AI agents. Covers performance diagnostics, in
 
 - **`sqlcmd`** — [Microsoft Download](https://learn.microsoft.com/en-us/sql/tools/sqlcmd/sqlcmd-utility)
 - **SQL Server 2016+** — All DMV queries target compatibility level 130+
-- **Permissions** — `VIEW SERVER STATE` for most DMV queries; `sysadmin` or `db_owner` for some operations
+- **Permissions** — `VIEW SERVER STATE` for most DMV queries; operation-specific least privilege and exact-target DBA review for changes
 
 ---
 
 ## Quick Connect
 
+Prefer integrated authentication (`-E`) with an operator-configured identity. For SQL
+authentication, sqlcmd reads an already securely provisioned `SQLCMDPASSWORD` directly;
+never expand it into arguments. Never ask for, print, or persist passwords. Do not
+create password files, use shell tracing, or dump the environment. If no secure
+authentication is available, stop and let the operator configure it outside the agent.
+
 ```bash
 # Windows Authentication (domain-joined machine)
 sqlcmd -S "$SQL_SERVER" -E
 
-# SQL Authentication
-sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d "$SQL_DATABASE"
+# SQL Authentication: only with SQLCMDPASSWORD already securely provisioned
+sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -d "$SQL_DATABASE"
 
 # Named instance + specific database
-sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d "$SQL_DATABASE"
+sqlcmd -S "$SQL_SERVER" -E -d "$SQL_DATABASE"
 
 # Run a diagnostic script
-sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d master -i scripts/top-slow-queries.sql
+sqlcmd -S "$SQL_SERVER" -E -d master -i scripts/top-slow-queries.sql
 
 # Run with output to file
-sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d master -i scripts/wait-stats.sql -o results.txt -s "," -W
+sqlcmd -S "$SQL_SERVER" -E -d master -i scripts/wait-stats.sql -o results.txt -s "," -W
 ```
 
 ---
@@ -125,13 +135,13 @@ Do I need to check SQL Agent jobs or the error log?
 
 ```bash
 # Step 1: What is SQL Server waiting on?
-sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d master -i scripts/wait-stats.sql
+sqlcmd -S "$SQL_SERVER" -E -d master -i scripts/wait-stats.sql
 
 # Step 2: Which queries are consuming the most resources?
-sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d master -i scripts/top-slow-queries.sql
+sqlcmd -S "$SQL_SERVER" -E -d master -i scripts/top-slow-queries.sql
 
 # Step 3: What's running right now?
-sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d master -i scripts/active-queries.sql
+sqlcmd -S "$SQL_SERVER" -E -d master -i scripts/active-queries.sql
 ```
 
 Then read `sqlserver-diagnostics/SKILL.md` to interpret results.
@@ -164,13 +174,13 @@ Then read `sqlserver-execution-plans/SKILL.md` to interpret the plan.
 
 ```bash
 # Find missing indexes (sorted by impact score)
-sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d "$SQL_DATABASE" -i scripts/missing-indexes.sql
+sqlcmd -S "$SQL_SERVER" -E -d "$SQL_DATABASE" -i scripts/missing-indexes.sql
 
 # Check fragmentation
-sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d "$SQL_DATABASE" -i scripts/index-fragmentation.sql
+sqlcmd -S "$SQL_SERVER" -E -d "$SQL_DATABASE" -i scripts/index-fragmentation.sql
 
 # Find unused indexes costing write overhead
-sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d "$SQL_DATABASE" -i scripts/unused-indexes.sql
+sqlcmd -S "$SQL_SERVER" -E -d "$SQL_DATABASE" -i scripts/unused-indexes.sql
 ```
 
 See `sqlserver-indexes/SKILL.md` for interpretation and the rebuild/reorganize decision.
@@ -181,7 +191,7 @@ See `sqlserver-indexes/SKILL.md` for interpretation and the rebuild/reorganize d
 
 ```bash
 # Run blocking analysis
-sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d master -i scripts/blocking-analysis.sql
+sqlcmd -S "$SQL_SERVER" -E -d master -i scripts/blocking-analysis.sql
 ```
 
 See `sqlserver-monitoring/SKILL.md` for deadlock investigation and KILL guidance.

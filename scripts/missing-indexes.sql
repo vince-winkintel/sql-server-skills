@@ -4,10 +4,19 @@
 -- would most improve query performance, with generated CREATE INDEX statements.
 -- Requires: VIEW SERVER STATE permission
 -- Target:   SQL Server 2016+
--- Usage:    sqlcmd -S <server> -U <user> -P <pass> -d <dbname> -i missing-indexes.sql
+-- Usage:    sqlcmd -S <server> -E -d <dbname> -i missing-indexes.sql
 -- NOTE:     Run in the context of the database you want to analyze.
 --           Stats reset on SQL Server service restart.
 -- ============================================================
+
+-- Require exact-target DBA review of server, database, schema, table and index before
+-- executing any proposal. Use least privilege (ALTER on the target table), check
+-- constraints, query hints and other dependencies, and test in staging with a recovery
+-- plan. Never automatically execute returned SQL. Capture index definitions before
+-- changes; budget locks, transaction log, disk/tempdb capacity and a maintenance window.
+-- Check ONLINE support for the edition and index type; online operations still take locks.
+-- Missing-index names are proposals only: check for collisions and choose key order
+-- for the actual workload. Catalog visibility may be limited; NULL output is not approval.
 
 SELECT TOP 20
     -- Impact score = estimated % improvement × number of times the index would have helped
@@ -44,34 +53,37 @@ SELECT TOP 20
 
     -- Generated CREATE INDEX statement — review and adjust name/columns before running
     -- IMPORTANT: Consolidate with similar existing indexes before creating new ones
-    'CREATE NONCLUSTERED INDEX [IX_' +
-        REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-            OBJECT_NAME(mid.object_id) + '_' +
-            ISNULL(mid.equality_columns, '') +
-            ISNULL(mid.inequality_columns, ''),
-            '[', ''), ']', ''), ', ', '_'), ' ', '_'), '__', '_')
-        + '] ON ' + mid.statement
-        + ' ('
-        + ISNULL(mid.equality_columns, '')
-        + CASE
-            WHEN mid.inequality_columns IS NOT NULL
-                THEN CASE WHEN mid.equality_columns IS NOT NULL THEN ', ' ELSE '' END
-                     + mid.inequality_columns
-            ELSE ''
-          END
-        + ')'
-        + CASE
-            WHEN mid.included_columns IS NOT NULL
-                THEN ' INCLUDE (' + mid.included_columns + ')'
-            ELSE ''
-          END
-        + ' WITH (ONLINE = ON);'                               AS suggested_create_index
+    N'CREATE NONCLUSTERED INDEX '
+        + QUOTENAME(N'IX_missing_' + CONVERT(nvarchar(11), mid.object_id)
+            + N'_' + CONVERT(nvarchar(11), mid.index_handle))
+        + N' ON ' + QUOTENAME(DB_NAME(mid.database_id))
+        + N'.' + QUOTENAME(OBJECT_SCHEMA_NAME(mid.object_id, mid.database_id))
+        + N'.' + QUOTENAME(OBJECT_NAME(mid.object_id, mid.database_id))
+        + N' (' + cols.key_columns + N')'
+        + CASE WHEN cols.included_columns IS NOT NULL
+               THEN N' INCLUDE (' + cols.included_columns + N')' ELSE N'' END
+        + N' WITH (ONLINE = ON);'                               AS suggested_create_index
 
 FROM sys.dm_db_missing_index_details mid
 JOIN sys.dm_db_missing_index_groups mig
     ON mid.index_handle = mig.index_handle
 JOIN sys.dm_db_missing_index_group_stats migs
     ON mig.index_group_handle = migs.group_handle
+
+-- Rebuild lists from individual names, not comma-splitting DMV display strings.
+OUTER APPLY (
+    SELECT
+        STUFF((SELECT N', ' + QUOTENAME(c.column_name)
+               FROM sys.dm_db_missing_index_columns(mid.index_handle) AS c
+               WHERE c.column_usage IN ('EQUALITY', 'INEQUALITY')
+               ORDER BY CASE c.column_usage WHEN 'EQUALITY' THEN 0 ELSE 1 END, c.column_id
+               FOR XML PATH(N''), TYPE).value(N'.', N'nvarchar(max)'), 1, 2, N'') AS key_columns,
+        STUFF((SELECT N', ' + QUOTENAME(c.column_name)
+               FROM sys.dm_db_missing_index_columns(mid.index_handle) AS c
+               WHERE c.column_usage = 'INCLUDE'
+               ORDER BY c.column_id
+               FOR XML PATH(N''), TYPE).value(N'.', N'nvarchar(max)'), 1, 2, N'') AS included_columns
+) AS cols
 
 -- Filter to current database only
 WHERE mid.database_id = DB_ID()

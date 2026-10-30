@@ -9,6 +9,13 @@ Use this skill for database backup strategies, restore procedures, and verifying
 
 ---
 
+Before any backup, restore or recovery-model change, require exact-target DBA review
+of the server, database, backup set and destination paths. Use least privilege and
+SQL Server service-account filesystem permissions scoped to the intended location.
+Backups contain sensitive data: restrict access and protect them according to the
+operator's encryption and retention policy. Test in staging with a recovery plan,
+capacity checks and an approved maintenance window; never run these changes autonomously.
+
 ## Recovery Models
 
 Choose the right recovery model before designing your backup strategy.
@@ -25,18 +32,25 @@ SELECT name, recovery_model_desc, log_reuse_wait_desc
 FROM sys.databases
 WHERE name = DB_NAME();
 
+-- DBA approval required: SIMPLE breaks the log backup chain and point-in-time recovery.
+-- These are alternative choices, not a sequence to execute.
 -- Change recovery model
 ALTER DATABASE MyDatabase SET RECOVERY FULL;
 ALTER DATABASE MyDatabase SET RECOVERY SIMPLE;
 ```
 
-⚠️ **Switching to FULL recovery model:** You must take a full backup immediately after switching — until you do, the log cannot be backed up and will grow unbounded.
+⚠️ **Switching from SIMPLE to FULL:** Take a full or differential data backup to start the log backup chain, then schedule log backups and monitor space. Switching to SIMPLE loses log-chain continuity; assess RPO and recovery requirements first.
 
 ---
 
 ## BACKUP DATABASE
 
 ### Full Backup
+
+Confirm destination capacity, access and retention; do not overwrite required backup
+media. An ordinary full backup changes the differential base. For an ad hoc full
+backup, consider `COPY_ONLY` to preserve the scheduled differential base. Check I/O
+impact and protect backup files; do not add INIT/FORMAT to bypass media safeguards.
 
 ```sql
 -- Full backup to disk
@@ -78,6 +92,15 @@ WITH COMPRESSION, CHECKSUM, STATS = 10;
 ---
 
 ## RESTORE DATABASE
+
+**STOP: restore can replace data and interrupt applications.** Require exact-target
+DBA review, service-owner approval and a tested recovery plan. Prefer restoring to a
+new staging database and new files first. Inspect HEADERONLY and FILELISTONLY,
+verify the full/differential/log chain and recovery point, and confirm every MOVE
+path avoids existing files. Determine whether a tail-log backup is needed and possible
+to preserve recent work before restoring. Do not add REPLACE to bypass safety checks.
+NORECOVERY keeps the database unavailable for further restores; RECOVERY ends that
+restore sequence. Confirm client cutover, dependencies, capacity and outage timing.
 
 ### Restore from Full Backup Only
 
@@ -141,7 +164,7 @@ WITH
 
 ## RESTORE VERIFYONLY
 
-Verify a backup file is readable without performing the restore:
+Check backup readability without performing a restore. `RESTORE VERIFYONLY` does not replace a test restore or validate the full logical data structure. Rehearse restoration and application validation in isolation:
 
 ```sql
 RESTORE VERIFYONLY
@@ -204,4 +227,4 @@ ORDER BY last_full_backup ASC;
 - Store backups on a separate disk/server from the database
 - Test restores periodically (at least monthly) — an untested backup is not a backup
 - Use `WITH COMPRESSION` — typically 60-80% size reduction
-- Use `WITH CHECKSUM` — detects media corruption at backup time, not restore time
+- Use `WITH CHECKSUM` — validates available checksums; use restore checks and test restores too

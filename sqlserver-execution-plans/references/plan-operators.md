@@ -88,9 +88,39 @@ Any operator with a **yellow warning triangle** and "Spilled to TempDB" is a cri
 - **Hash Match spill** — Hash table didn't fit in memory grant; multiple TempDB passes required
 
 **Spill fix process:**
-1. Check the estimated vs actual rows entering the operator — large discrepancy = stale stats
-2. Run `UPDATE STATISTICS tablename WITH FULLSCAN`
+1. Check the estimated vs actual rows entering the operator. A large discrepancy warrants investigation; it does not prove statistics are stale.
+2. Inspect relevant statistics age, sampling and histogram in the confirmed database using read-only `DBCC SHOW_STATISTICS` or `sys.dm_db_stats_properties`, with appropriate metadata permissions. Consider a targeted update only if the evidence supports it, under the review gates below.
 3. If estimates are accurate but grants are too small, query is legitimately large — optimize to reduce row counts or add indexes
+
+**Statistics changes require review:** Obtain exact-target DBA approval of the
+database, schema, table and statistic; prefer a named statistic over table-wide
+maintenance. Confirm database context and require ALTER on the target table;
+monitoring permission alone does not authorize changes. FULLSCAN is optional and
+requires workload justification, not just a spill or estimate error. It reads all
+rows, costs I/O/CPU, and statistics updates can use tempdb and cause recompilation
+with different estimates and plans.
+
+Rehearse in staging with representative data, schedule a maintenance window, capture
+statistics/histogram and query-performance baselines, and agree on monitoring,
+stop criteria and a DBA-owned recovery plan before execution. On errors or regressions,
+stop further maintenance and consult the DBA. There is no universal rollback:
+the example cannot undo statistic/histogram changes or restore the plan cache and
+previous plans; any recovery action needs separate workload-specific review.
+
+```sql
+-- Review-only mutation: replace with the approved statistic name and confirm context.
+-- FULLSCAN requires the separate workload justification above.
+-- UPDATE STATISTICS dbo.Orders [ReviewedStatisticName] WITH FULLSCAN;
+```
+
+Do not escalate a spill investigation to database-wide `sp_updatestats`. That is
+**not a default** fix: it needs separate DBA approval of the entire database scope
+and the same workload, staging, maintenance and recovery gates. On SQL Server it
+requires the database owner (dbo) or sysadmin; db_owner membership alone is not
+sufficient. Do not elevate a monitoring account to run it.
+
+References: [UPDATE STATISTICS](https://learn.microsoft.com/en-us/sql/t-sql/statements/update-statistics-transact-sql),
+[sp_updatestats](https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sp-updatestats-transact-sql).
 
 ---
 

@@ -93,7 +93,11 @@ fi
 
 # 2. Sub-skills in alphabetical order (any directory containing a SKILL.md,
 #    excluding the root itself and the scripts/ directory)
-mapfile -t SUB_SKILLS < <(
+# Bash 3.2 (the macOS system shell) has no mapfile.
+SUB_SKILLS=()
+while IFS= read -r skill_path; do
+  SUB_SKILLS+=("$skill_path")
+done < <(
   find "$REPO_ROOT" -mindepth 2 -maxdepth 2 -name "SKILL.md" \
     ! -path "$REPO_ROOT/scripts/*" \
     | sort

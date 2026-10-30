@@ -4,7 +4,7 @@
 -- blockers, and inspect lock details.
 -- Requires: VIEW SERVER STATE permission
 -- Target:   SQL Server 2016+
--- Usage:    sqlcmd -S <server> -U <user> -P <pass> -d master -i blocking-analysis.sql
+-- Usage:    sqlcmd -S <server> -E -d master -i blocking-analysis.sql
 --
 -- ⚠️  NEVER issue KILL commands autonomously. Only kill a session
 --     after confirming with the application owner that it is safe
@@ -166,8 +166,14 @@ ORDER BY
 --
 --   -- KILL <session_id>;   ← Replace with actual session_id from Part 2
 --
---   KILL rolls back all uncommitted work in that session. It is immediate
---   but irreversible. The blocked sessions will then proceed.
+--   Only a DBA may act after exact-target review and application-owner approval.
+--   Recheck login, host, program, transaction and connection start time immediately before
+--   acting: session IDs can be reused. Never target system sessions. Prefer waiting or
+--   application-level cancellation when safe. Use least privilege: ALTER ANY CONNECTION
+--   on SQL Server, not a blanket sysadmin grant. Uncommitted work is lost; rollback can take
+--   longer than the original transaction and blocking can persist during rollback. There
+--   is no undo for KILL; plan application recovery and monitor the rollback with
+--   KILL <session_id> WITH STATUSONLY rather than repeating a bare KILL against a reused ID.
 --
 -- Option 4 — Prevent recurrence
 --   - Add indexes to reduce lock duration (queries finish faster = unlock sooner)

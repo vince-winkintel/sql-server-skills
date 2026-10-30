@@ -202,6 +202,16 @@ AND s.session_id NOT IN (
 ```
 
 ⚠️ **Using KILL:**
+
+Only a DBA may act after exact-target review and application-owner approval.
+Recheck login, host, program, transaction and connection start time immediately before
+acting: session IDs can be reused. Never target system sessions. Prefer waiting or
+application-level cancellation when safe. Use least privilege: ALTER ANY CONNECTION
+on SQL Server, not a blanket sysadmin grant. Uncommitted work is lost; rollback can take
+longer than the original transaction and blocking can persist during rollback. There
+is no undo for KILL; plan application recovery and monitor the rollback with
+KILL <session_id> WITH STATUSONLY rather than repeating a bare KILL against a reused ID.
+
 ```sql
 -- KILL should only be used after business confirmation that the blocking transaction
 -- can be safely terminated. Killing a session rolls back all open transactions.
