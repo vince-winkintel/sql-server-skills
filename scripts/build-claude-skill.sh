@@ -34,6 +34,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Resolve relative output against the caller's directory before entering WORK_DIR.
+# Do not create missing parents: an invalid destination must fail.
+OUTPUT_DIR="$(cd "$(dirname "$OUTPUT_ZIP")" && pwd)"
+OUTPUT_ZIP="$OUTPUT_DIR/$(basename "$OUTPUT_ZIP")"
+
 # ── Temp workspace ────────────────────────────────────────────────────────────
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
@@ -61,7 +66,7 @@ echo "Building merged SKILL.md from $REPO_ROOT..."
 cat >> "$MERGED" <<'FRONTMATTER'
 ---
 name: sql-server-skills
-description: Comprehensive SQL Server performance diagnostics, index analysis, execution plan interpretation, query optimization, schema management, backup/restore, and monitoring using sqlcmd and T-SQL DMVs. Use when analyzing slow queries, investigating wait stats, finding missing indexes, reading execution plans, optimizing stored procedures or views, managing migrations, monitoring SQL Agent jobs, or diagnosing blocking/deadlocks on Microsoft SQL Server. Triggers on: SQL Server, MSSQL, sqlcmd, T-SQL performance, slow query, execution plan, DMV, missing index, wait stats, blocking, deadlock, stored procedure optimization, view tuning.
+description: "Comprehensive SQL Server performance diagnostics, index analysis, execution plan interpretation, query optimization, schema management, backup/restore, and monitoring using sqlcmd and T-SQL DMVs. Use when analyzing slow queries, investigating wait stats, finding missing indexes, reading execution plans, optimizing stored procedures or views, managing migrations, monitoring SQL Agent jobs, or diagnosing blocking/deadlocks on Microsoft SQL Server. Triggers on: SQL Server, MSSQL, sqlcmd, T-SQL performance, slow query, execution plan, DMV, missing index, wait stats, blocking, deadlock, stored procedure optimization, view tuning."
 dependencies:
   - sqlcmd
 ---
@@ -93,7 +98,11 @@ fi
 
 # 2. Sub-skills in alphabetical order (any directory containing a SKILL.md,
 #    excluding the root itself and the scripts/ directory)
-mapfile -t SUB_SKILLS < <(
+# Bash 3.2 (the macOS system shell) has no mapfile.
+SUB_SKILLS=()
+while IFS= read -r skill_path; do
+  SUB_SKILLS+=("$skill_path")
+done < <(
   find "$REPO_ROOT" -mindepth 2 -maxdepth 2 -name "SKILL.md" \
     ! -path "$REPO_ROOT/scripts/*" \
     | sort
@@ -139,6 +148,11 @@ output, source = sys.argv[1], sys.argv[2]
 with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as zf:
     zf.write(source, 'sql-server-skills/SKILL.md')
 " "$OUTPUT_ZIP" "$MERGED"
+fi
+
+if [[ ! -s "$OUTPUT_ZIP" ]]; then
+  echo "Packaging failed: output archive was not created: $OUTPUT_ZIP" >&2
+  exit 1
 fi
 
 LINES=$(wc -l < "$MERGED")

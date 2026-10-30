@@ -4,7 +4,7 @@
 -- resource consumption, and any blocking relationships.
 -- Requires: VIEW SERVER STATE permission
 -- Target:   SQL Server 2016+
--- Usage:    sqlcmd -S <server> -U <user> -P <pass> -d master -i active-queries.sql
+-- Usage:    sqlcmd -S <server> -E -d master -i active-queries.sql
 -- Run this when: a server seems slow RIGHT NOW, to see what's happening live.
 -- ============================================================
 

@@ -256,26 +256,59 @@ INSERT INTO @SmallSet SELECT TOP 10 OrderID, CustomerID FROM Orders;
 
 ## Statistics Management
 
+Start with read-only inspection in the confirmed database. Review metadata visibility
+and the permissions for these diagnostics; missing output is not approval to change
+statistics. Confirm the table and statistic exist before inspecting them.
+
 ```sql
--- Update statistics for a specific table (full scan = accurate, slower)
-UPDATE STATISTICS dbo.Orders WITH FULLSCAN;
-
--- Update all statistics in the current database
-EXEC sp_updatestats;
-
--- Check if auto-update statistics is enabled (should be ON)
+-- Read-only: inspect automatic statistics settings, normally enabled.
 SELECT name, is_auto_update_stats_on, is_auto_create_stats_on
 FROM sys.databases
 WHERE name = DB_NAME();
 
--- Check statistics for a specific table
+-- Read-only: inspect this existing statistic's age, sampling and histogram.
 DBCC SHOW_STATISTICS ('dbo.Orders', 'IX_Orders_CustomerID');
 ```
 
-**When to run manually:**
-- After a large bulk load (auto-update threshold is 20% of rows modified — can lag on large tables)
-- After index creation (statistics are created automatically but may not be full scan)
-- When execution plans look wrong (row estimates far off from actuals)
+Bulk loads, index changes or inaccurate row estimates are reasons to inspect
+statistics and the workload, not automatic triggers for maintenance. Automatic update
+thresholds depend on SQL Server version, compatibility level and table size; do not
+assume a universal 20% threshold. Estimate errors alone do not justify FULLSCAN.
+
+Require **exact-target DBA approval** of the database, schema, table and statistic
+before any update. Prefer a reviewed named statistic (or explicitly reviewed table
+scope); confirm the database context and require **ALTER on the target table**.
+Monitoring permission alone does not authorize changes. Review the existing sampling
+and justify any FULLSCAN: it reads all rows and costs I/O/CPU; statistics maintenance
+can use tempdb and cause recompilation, changing estimates and execution plans.
+
+Rehearse on representative data in staging, schedule a maintenance window, capture
+statistics/histogram and query-performance baselines, and agree on monitoring,
+stop criteria and a DBA-owned recovery plan before execution. If errors or regressions
+occur, stop further maintenance and consult the DBA. There is no universal rollback:
+these examples cannot automatically undo statistic/histogram changes or restore the
+plan cache and previous plans. Recovery needs separate workload-specific review.
+
+```sql
+-- Review-only mutation: replace with the approved statistic name and confirm context.
+-- FULLSCAN is optional and needs its own workload justification.
+-- UPDATE STATISTICS dbo.Orders [ReviewedStatisticName] WITH FULLSCAN;
+```
+
+`sp_updatestats` is database-wide maintenance, **not a default** troubleshooting step.
+It requires separate DBA approval of the entire database scope and the same staging,
+workload, maintenance and recovery gates above. On SQL Server, the caller must be
+the database owner (dbo) or a member of the sysadmin fixed server role;
+db_owner membership alone is not sufficient. Do not escalate a monitoring account
+to run it. It can affect many statistics and cause recompilation across the database.
+
+```sql
+-- Review-only mutation, after the separate database-wide approval:
+-- EXEC sys.sp_updatestats;
+```
+
+References: [UPDATE STATISTICS](https://learn.microsoft.com/en-us/sql/t-sql/statements/update-statistics-transact-sql),
+[sp_updatestats](https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sp-updatestats-transact-sql).
 
 ---
 

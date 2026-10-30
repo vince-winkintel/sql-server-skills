@@ -3,7 +3,7 @@
 -- Identifies the top 25 slowest queries since last SQL Server restart.
 -- Requires: VIEW SERVER STATE permission
 -- Target:   SQL Server 2016+
--- Usage:    sqlcmd -S <server> -U <user> -P <pass> -d master -i top-slow-queries.sql
+-- Usage:    sqlcmd -S <server> -E -d master -i top-slow-queries.sql
 -- ============================================================
 
 SELECT TOP 25

@@ -90,12 +90,24 @@ ALTER TABLE dbo.Orders ADD CONSTRAINT FK_Orders_Customers
 -- Add a non-clustered index
 CREATE INDEX IX_Customers_Region ON dbo.Customers (Region) INCLUDE (CompanyName, IsActive);
 
--- Drop a column (check for foreign keys, indexes, computed columns first)
+-- STOP: exact-target DBA review required. Check dependencies (constraints, indexes,
+-- modules, application code and jobs); catalog checks do not find every caller.
+-- Rehearse in staging; verify a backup/tested recovery plan and maintenance window.
+-- Use least privilege on the target. Prefer staged deprecation before removal.
+-- DROP COLUMN loses stored data after commit; recovery may require restore.
+-- Drop a column only after the above checks
 ALTER TABLE dbo.Customers DROP COLUMN PhoneNumber;
 
+-- STOP: exact-target DBA review required. Check dependencies (constraints, indexes,
+-- modules, application code and jobs); catalog checks do not find every caller.
+-- Rehearse in staging; verify a backup/tested recovery plan and maintenance window.
+-- Use least privilege on the target. Prefer staged deprecation before removal.
+-- Dropping a constraint removes integrity protection; verify replacement validation.
 -- Drop a constraint
 ALTER TABLE dbo.Customers DROP CONSTRAINT CK_Customers_Balance;
 
+-- Renaming can break dependencies and does not update all callers.
+-- Apply the same DBA/staging/recovery review before using sp_rename.
 -- Rename a column (use sp_rename)
 EXEC sp_rename 'dbo.Customers.CompanyName', 'BusinessName', 'COLUMN';
 ```
@@ -104,7 +116,7 @@ EXEC sp_rename 'dbo.Customers.CompanyName', 'BusinessName', 'COLUMN';
 
 ## Migration Scripts — Idempotent Patterns
 
-Write migrations so they can be re-run safely. This is critical for deployments.
+Existence guards only make repeated execution conditional; they do not prove a migration is safe or reversible.
 
 ```sql
 -- ✅ Idempotent: Add column only if it doesn't exist
@@ -151,7 +163,12 @@ BEGIN
 END
 GO
 
--- ✅ Idempotent: Drop object only if it exists
+-- STOP: exact-target DBA review required. Check dependencies (constraints, indexes,
+-- modules, application code and jobs); catalog checks do not find every caller.
+-- Rehearse in staging; verify a backup/tested recovery plan and maintenance window.
+-- Use least privilege on the target. Prefer staged deprecation before removal.
+-- Preserve definition and permissions for recovery; DROP can break callers.
+-- Conditional removal still needs approval even when the object exists
 IF OBJECT_ID('dbo.usp_OldProcedure', 'P') IS NOT NULL
     DROP PROCEDURE dbo.usp_OldProcedure;
 GO
@@ -193,11 +210,55 @@ ALTER TABLE dbo.Orders ADD CONSTRAINT FK_Orders_Customers
 ALTER TABLE dbo.Orders ADD CONSTRAINT FK_Orders_Customers
     FOREIGN KEY (CustomerID) REFERENCES dbo.Customers (CustomerID);
 
--- Disable FK for bulk load, re-enable after
-ALTER TABLE dbo.OrderItems NOCHECK CONSTRAINT FK_OrderItems_Orders;
--- ... bulk insert ...
-ALTER TABLE dbo.OrderItems WITH CHECK CHECK CONSTRAINT FK_OrderItems_Orders;
 ```
+
+### Bulk load with foreign-key enforcement disabled
+
+Prefer loading with enforcement retained. Disabling a foreign key requires
+**exact-target DBA approval** of the database, schema, table and constraint,
+confirmed database context, and **ALTER on the target table**. Check dependencies
+(referenced tables, cascading actions, applications and jobs) and availability:
+disabling/revalidating can block concurrent work and validation can scan substantial
+data. Rehearse the load, validation and failure recovery in staging; agree on a
+maintenance window and tested backup/recovery plan. Record the constraint definition
+and initial enabled/trusted state. Quiesce normal writes and coordinate dependent
+writers until the DBA verifies enforcement and trust after the load. While disabled,
+the foreign key does not validate inserts and updates; invalid rows can enter.
+
+```sql
+-- Review-only steps for the approved constraint; never disable all constraints.
+-- ALTER TABLE dbo.OrderItems NOCHECK CONSTRAINT FK_OrderItems_Orders;
+-- Run only the separately reviewed bulk load while normal writers remain stopped.
+```
+
+If the load fails or is interrupted, stop and inspect both partial data and actual
+constraint state; do not assume automatic rollback or restored enforcement.
+Revalidation with `WITH CHECK CHECK` is not guaranteed to succeed. If it fails,
+keep normal writes stopped, have the DBA reconcile or remove violating rows under
+the agreed recovery plan, accounting for enforcement on both related tables, then
+retry validation. Do not bypass failures with unchecked re-enabling or declare success.
+
+```sql
+-- Attempt only after load/data reconciliation; errors require the recovery path above.
+-- ALTER TABLE dbo.OrderItems WITH CHECK CHECK CONSTRAINT FK_OrderItems_Orders;
+
+-- Verify the exact FK is enabled AND trusted before normal writes resume.
+-- Missing/invisible metadata also fails this check; do not treat it as success.
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.foreign_keys
+    WHERE parent_object_id = OBJECT_ID(N'dbo.OrderItems', N'U')
+      AND name = N'FK_OrderItems_Orders'
+      AND is_disabled = 0
+      AND is_not_trusted = 0
+)
+    THROW 50001, 'STOP: foreign key is missing, disabled or untrusted; keep normal writes stopped.', 1;
+```
+
+This check does not itself stop application writes: the DBA must maintain the write
+pause through recovery and verification, and authorize resumption only after the
+load and validation succeed and the exact constraint passes both state checks.
+See [Microsoft's foreign-key disable and trust guidance](https://learn.microsoft.com/en-us/sql/relational-databases/tables/disable-foreign-key-constraints-with-insert-and-update-statements).
 
 ---
 

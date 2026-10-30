@@ -4,10 +4,37 @@
 -- Uses SAMPLED mode for performance on large databases (avoid DETAILED).
 -- Requires: VIEW DATABASE STATE permission
 -- Target:   SQL Server 2016+
--- Usage:    sqlcmd -S <server> -U <user> -P <pass> -d <dbname> -i index-fragmentation.sql
+-- Usage:    sqlcmd -S <server> -E -d <dbname> -i index-fragmentation.sql
 -- NOTE:     Run while connected to the database you want to check.
 --           On large databases, this may take a few minutes.
 -- ============================================================
+
+-- Require exact-target DBA review of server, database, schema, table and index before
+-- executing any proposal. Use least privilege (ALTER on the target table), check
+-- constraints, query hints and other dependencies, and test in staging with a recovery
+-- plan. Never automatically execute returned SQL. Capture index definitions before
+-- changes; budget locks, transaction log, disk/tempdb capacity and a maintenance window.
+-- Check ONLINE support for the edition and index type; online operations still take locks.
+-- Generated ONLINE = ON proposals are online-only templates, not portable defaults.
+-- Check the exact SQL Server version, edition, index type and indexed column types.
+-- EngineEdition alone does not establish eligibility. Do not remove ONLINE = ON to retry
+-- an unsupported operation. Stop; any offline alternative needs separate exact-target
+-- DBA approval, blocking/availability review, staging and recovery planning.
+-- Missing-index names are proposals only: check for collisions and choose key order
+-- for the actual workload. Catalog visibility may be limited; NULL output is not approval.
+
+-- Statistics proposals are review-only mutations, not an automatic follow-up.
+-- Inspect statistics age, sampling and histogram first; fragmentation is not evidence
+-- that an update is needed. Require exact-target DBA approval of the
+-- database, schema, table and statistic, confirmed context and ALTER on the target table.
+-- Monitoring permission alone is insufficient. Each proposal updates all statistics
+-- on that table: prefer a reviewed named statistic unless the DBA approves table scope.
+-- Review workload I/O/CPU, tempdb use and recompilation/plan changes; FULLSCAN reads
+-- all rows and needs separate justification. Rehearse in staging and schedule a
+-- maintenance window. Capture statistics/histogram and query-performance baselines;
+-- agree on monitoring, stop criteria and a DBA-owned recovery plan. On errors or
+-- regressions, stop further maintenance and consult the DBA. There is no universal rollback
+-- of statistics or plan changes; these examples cannot restore histograms or plan cache.
 
 SELECT
     s.name                                                      AS schema_name,
@@ -32,19 +59,25 @@ SELECT
         ELSE 'SKIP'
     END                                                         AS recommended_action,
 
-    -- Ready-to-run T-SQL maintenance statement
-    -- ONLINE = ON keeps the table accessible during rebuild (Enterprise Edition only)
-    -- If Standard Edition, remove WITH (ONLINE = ON) — table will be locked during REBUILD
+    -- Proposed T-SQL only: exact-target DBA review required; never auto-execute
+    -- Validate ONLINE support and locking impact; do not silently switch to offline rebuild
     CASE
         WHEN ips.avg_fragmentation_in_percent > 30 THEN
-            'ALTER INDEX [' + i.name + '] ON [' + s.name + '].[' + o.name
-            + '] REBUILD WITH (ONLINE = ON, FILLFACTOR = 80);'
+            N'ALTER INDEX ' + QUOTENAME(i.name) + N' ON ' + QUOTENAME(DB_NAME())
+            + N'.' + QUOTENAME(s.name) + N'.' + QUOTENAME(o.name)
+            + N' REBUILD WITH (ONLINE = ON, FILLFACTOR = 80);'
         WHEN ips.avg_fragmentation_in_percent > 10 THEN
-            'ALTER INDEX [' + i.name + '] ON [' + s.name + '].[' + o.name
-            + '] REORGANIZE;'
-            + ' -- Then run: UPDATE STATISTICS [' + s.name + '].[' + o.name + '];'
+            N'ALTER INDEX ' + QUOTENAME(i.name) + N' ON ' + QUOTENAME(DB_NAME())
+            + N'.' + QUOTENAME(s.name) + N'.' + QUOTENAME(o.name)
+            + N' REORGANIZE;'
         ELSE '-- No action needed'
-    END                                                         AS maintenance_sql
+    END                                                         AS maintenance_sql,
+    -- Separate proposal: identifiers must never be embedded in generated line comments.
+    CASE WHEN ips.avg_fragmentation_in_percent > 10
+               AND ips.avg_fragmentation_in_percent <= 30 THEN
+        N'UPDATE STATISTICS ' + QUOTENAME(DB_NAME())
+        + N'.' + QUOTENAME(s.name) + N'.' + QUOTENAME(o.name) + N';'
+    END AS proposed_statistics_sql
 
 FROM sys.dm_db_index_physical_stats(
     DB_ID(),    -- Current database
@@ -69,10 +102,10 @@ ORDER BY ips.avg_fragmentation_in_percent DESC;
 
 -- ============================================================
 -- POST-REORGANIZE: Statistics are NOT updated by REORGANIZE.
--- Run this after a REORGANIZE pass to keep statistics current:
---   UPDATE STATISTICS <schema>.<table>;
+-- Inspect first; any proposed UPDATE STATISTICS needs the local approval, workload,
+-- staging, maintenance, stop and recovery gates above. Never auto-execute proposals.
 --
--- POST-REBUILD: Statistics ARE automatically updated by REBUILD.
+-- POST-REBUILD: The rebuilt index's statistics are automatically updated by REBUILD.
 --
 -- FILL FACTOR = 80 on REBUILD leaves 20% free space on each page,
 -- reducing immediate re-fragmentation on tables with frequent inserts.

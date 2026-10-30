@@ -195,20 +195,46 @@ One of the most important things to check: does SQL Server's estimate match real
 
 | Discrepancy | Meaning | Fix |
 |-------------|---------|-----|
-| Estimate = 1, Actual = 50,000 | Severely underestimated — bad plan (wrong join strategy, missing index) | Update statistics, check for parameter sniffing |
-| Estimate = 50,000, Actual = 1 | Overestimated — wasteful grants, parallel plan where serial is better | Update statistics |
+| Estimate = 1, Actual = 50,000 | Severely underestimated — bad plan (wrong join strategy, missing index) | Inspect statistics under the review gates below; check for parameter sniffing |
+| Estimate = 50,000, Actual = 1 | Overestimated — wasteful grants, parallel plan where serial is better | Inspect statistics under the review gates below |
 | Within 2-3x | Acceptable | — |
 
 **Update statistics:**
 
+Require **exact-target DBA approval** of the database, schema, table and statistic
+before any update. Prefer a reviewed named statistic (or explicitly reviewed table
+scope); confirm the database context and require **ALTER on the target table**.
+Monitoring permission alone does not authorize changes. Inspect statistics age and
+sampling first; estimate errors alone do not justify FULLSCAN.
+
+Review workload impact: FULLSCAN reads all rows, consumes I/O/CPU and can use tempdb;
+statistics updates can trigger recompilation and change cardinality estimates and
+execution plans. Rehearse on representative data in staging, schedule a maintenance window,
+capture statistics/histogram and query-performance baselines, and agree on monitoring,
+stop criteria and a DBA-owned recovery plan before execution. These examples
+cannot automatically undo statistic/histogram changes or restore the plan cache and
+previous plans. There is no universal rollback; investigate regressions and use a
+separately reviewed, workload-specific recovery action rather than clearing cache.
+On errors or regressions, stop further maintenance and consult the DBA.
+
 ```sql
--- Update all statistics on a table
-UPDATE STATISTICS dbo.Orders WITH FULLSCAN;
+-- Review-only example: replace with the approved statistic name and confirm context.
+-- FULLSCAN is optional and needs its own workload justification.
+-- UPDATE STATISTICS dbo.Orders [ReviewedStatisticName] WITH FULLSCAN;
+```
 
--- Update all statistics in the database
-EXEC sp_updatestats;
+`sp_updatestats` is database-wide maintenance, **not a default** troubleshooting step.
+It requires separate DBA approval of the entire database scope and the same staging,
+workload, maintenance and recovery gates above. On SQL Server, the caller must be
+the database owner (dbo) or a member of the sysadmin fixed server role;
+db_owner membership alone is not sufficient. Do not escalate a monitoring account
+to run it. It can affect many statistics and cause recompilation across the database.
 
--- Check statistics age
+```sql
+-- Reference only, after the separate database-wide approval:
+-- EXEC sys.sp_updatestats;
+
+-- Read-only inspection in the confirmed database; review metadata visibility.
 SELECT
     OBJECT_NAME(s.object_id) AS table_name,
     s.name                   AS stat_name,
@@ -218,9 +244,12 @@ SELECT
     sp.modification_counter
 FROM sys.stats s
 CROSS APPLY sys.dm_db_stats_properties(s.object_id, s.stats_id) sp
-WHERE OBJECT_NAME(s.object_id) = 'Orders'
+WHERE s.object_id = OBJECT_ID(N'dbo.Orders', N'U')
 ORDER BY sp.modification_counter DESC;
 ```
+
+References: [UPDATE STATISTICS](https://learn.microsoft.com/en-us/sql/t-sql/statements/update-statistics-transact-sql),
+[sp_updatestats](https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sp-updatestats-transact-sql).
 
 ---
 
@@ -269,9 +298,28 @@ AS
     SELECT * FROM Orders WHERE CustomerID = @LocalCustomerID;
 GO
 
--- Option 4: Clear the procedure cache (nuclear, use carefully in production)
-DBCC FREEPROCCACHE;
+-- Scoped alternative after DBA approval: mark one procedure for next-run compilation.
+-- Requires ALTER on that procedure; confirm database/schema/object and CPU impact.
+-- EXEC sys.sp_recompile N'dbo.usp_GetOrders';
+
+-- A DBA can instead evict one verified plan_handle (varbinary(64)):
+-- DBCC FREEPROCCACHE (<verified_plan_handle>);
+-- Requires ALTER SERVER STATE on SQL Server; never guess a handle or run autonomously.
+
+-- Instance-wide form retained for reference ONLY; never run from an agent workflow:
+-- DBCC FREEPROCCACHE;
 ```
+
+**DBA review required:** Prefer query-level hints, procedure recompilation or one
+verified plan handle, tested in staging against representative parameters. These
+choices still incur compilation CPU and can regress the targeted workload.
+The no-argument form is **instance-wide** on SQL Server: unrelated workloads lose
+cached plans and may suffer compilation spikes, latency or outages. It requires
+`ALTER SERVER STATE`; do not grant that permission to a monitoring identity.
+Cache eviction cannot be rolled back to restore the old cache. Preserve diagnostic
+evidence first, plan warm-up and recovery monitoring, and reserve broad eviction
+for an authorized DBA's controlled incident or maintenance window with service-owner
+approval. Platform scope differs on Azure SQL; verify the target platform before use.
 
 ---
 

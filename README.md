@@ -59,7 +59,7 @@ See [Compared to Existing Marketplace Skills](#compared-to-existing-marketplace-
 - **`sqlcmd`** — [Download from Microsoft](https://learn.microsoft.com/en-us/sql/tools/sqlcmd/sqlcmd-utility)
 - **SQL Server 2016+** (compatibility level 130+)
 - **`VIEW SERVER STATE`** permission for most DMV queries
-- **`sysadmin`** or `db_owner` for some backup/restore operations
+- **Operation-specific least privilege** and exact-target DBA review for maintenance; see SECURITY.md
 
 ---
 
@@ -99,10 +99,10 @@ bash scripts/build-claude-skill.sh
 
 ```bash
 # Connect and run a script
-sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d master -i scripts/wait-stats.sql
+sqlcmd -S "$SQL_SERVER" -E -d master -i scripts/wait-stats.sql
 
 # Run with CSV output to a file
-sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -P "$SQL_PASSWORD" -d master \
+sqlcmd -S "$SQL_SERVER" -E -d master \
   -i scripts/top-slow-queries.sql -o results.txt -s "," -W
 ```
 

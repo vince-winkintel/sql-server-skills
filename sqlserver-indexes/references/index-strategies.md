@@ -98,25 +98,35 @@ SQL Server processes columnstore queries in "batch mode" — 900+ rows at a time
 | Read-heavy / reporting | Monthly or quarterly check with `index-fragmentation.sql` |
 | Data warehouse | After large batch loads; rarely fragmented |
 
-**Sample maintenance script pattern:**
+**Review-only maintenance proposals (SQL Server 2016+):**
+
+Require exact-target DBA review of server, database, schema, table and index. Use
+least privilege (ALTER on the target table for maintenance), verify dependencies,
+recovery capacity and a staging trial. Check ONLINE support for the edition and
+index type; online operations still take locks. Budget log, disk and tempdb space
+and a maintenance window. Never automatically execute these returned statements.
+
+Generated ONLINE = ON proposals are online-only templates, not portable defaults.
+Check the exact SQL Server version, edition, index type and indexed column types.
+EngineEdition alone does not establish eligibility. Do not remove ONLINE = ON to retry
+an unsupported operation. Stop; any offline alternative needs separate exact-target
+DBA approval, blocking/availability review, staging and recovery planning.
 
 ```sql
--- Rebuild indexes with >30% fragmentation (page_count > 100)
-DECLARE @sql NVARCHAR(MAX);
-
-SELECT @sql = STRING_AGG(
-    'ALTER INDEX [' + i.name + '] ON [' + s.name + '].[' + o.name + '] REBUILD WITH (ONLINE = ON);',
-    CHAR(13)
-)
+-- Propose rebuilds only; one row per index, no executable batch
+SELECT DISTINCT
+    N'ALTER INDEX ' + QUOTENAME(i.name) + N' ON ' + QUOTENAME(DB_NAME())
+            + N'.' + QUOTENAME(s.name) + N'.' + QUOTENAME(o.name) + N' REBUILD WITH (ONLINE = ON);' AS proposed_maintenance_sql
 FROM sys.dm_db_index_physical_stats(DB_ID(), NULL, NULL, NULL, 'SAMPLED') ips
 JOIN sys.indexes i  ON ips.object_id = i.object_id AND ips.index_id = i.index_id
 JOIN sys.objects o  ON i.object_id = o.object_id
 JOIN sys.schemas s  ON o.schema_id = s.schema_id
 WHERE ips.avg_fragmentation_in_percent > 30
   AND ips.page_count > 100
-  AND i.name IS NOT NULL;
+  AND i.name IS NOT NULL
+  AND o.is_ms_shipped = 0;
 
-EXEC sp_executesql @sql;
+-- Stop here. A DBA reviews each exact target before any separate execution.
 ```
 
 ---

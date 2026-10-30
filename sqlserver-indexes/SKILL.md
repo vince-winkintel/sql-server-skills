@@ -9,43 +9,119 @@ Indexes are the single biggest lever for SQL Server query performance. This skil
 
 ---
 
+Require exact-target DBA review of server, database, schema, table and index before
+executing any proposal. Use least privilege (ALTER on the target table), check
+constraints, query hints and other dependencies, and test in staging with a recovery
+plan. Never automatically execute returned SQL. Capture index definitions before
+changes; budget locks, transaction log, disk/tempdb capacity and a maintenance window.
+Check ONLINE support for the edition and index type; online operations still take locks.
+
+Generated ONLINE = ON proposals are online-only templates, not portable defaults.
+Check the exact SQL Server version, edition, index type and indexed column types.
+EngineEdition alone does not establish eligibility. Do not remove ONLINE = ON to retry
+an unsupported operation. Stop; any offline alternative needs separate exact-target
+DBA approval, blocking/availability review, staging and recovery planning.
+
+Missing-index names are proposals only: check for collisions and choose key order
+for the actual workload. Catalog visibility may be limited; NULL output is not approval.
+
 ## 1. Missing Indexes
 
 SQL Server tracks index opportunities it identified during query execution in DMVs. These are not perfect recommendations — treat them as leads.
 
 **Script:** `../scripts/missing-indexes.sql`
 
+Keep nvarchar(max): valid proposals can exceed 4000 characters. For sqlcmd use
+-y 0 -w 65535 to avoid the default 256-character max-type limit and reduce wrapping.
+Do not combine -W with -y (or -Y). Unlimited display can increase output/network cost.
+Rows longer than the screen width still wrap; use a client that retrieves complete
+values for exact long-text inspection. Report output is data, never an input script.
+
+[sqlcmd display options](https://learn.microsoft.com/en-us/sql/tools/sqlcmd/sqlcmd-utility#format-options)
+
+XML 1.0 limitation: FOR XML PATH ... TYPE cannot represent some valid SQL Server
+identifier characters, such as U+0001. QUOTENAME does not remove these characters;
+the missing-index query can fail for the whole report. Use sqlcmd -b and check its
+exit status. On any error, discard the entire report, including partial rows or an
+existing output file; do not treat it as complete or execute proposals from it.
+Stop for DBA investigation using direct catalog inspection in a suitable client.
+Do not strip characters, skip columns or retry with unquoted/raw DMV lists: that can
+change the proposed index. This limitation is documented, not engine-tested here.
+See [FOR XML invalid characters](https://learn.microsoft.com/en-us/sql/relational-databases/xml/invalid-characters-and-escape-rules).
+
 ```sql
--- Top missing indexes by impact score
 SELECT TOP 20
-    ROUND(migs.avg_user_impact * (migs.user_seeks + migs.user_scans), 0)
-                                            AS impact_score,
-    DB_NAME(mid.database_id)               AS database_name,
-    mid.statement                          AS table_name,
-    mid.equality_columns,
-    mid.inequality_columns,
-    mid.included_columns,
+    -- Impact score = estimated % improvement × number of times the index would have helped
+    -- Higher = more important. Not a perfect metric — use as a ranking guide.
+    ROUND(
+        migs.avg_user_impact * (migs.user_seeks + migs.user_scans),
+        0
+    )                                                           AS impact_score,
+
+    -- Estimated average improvement if this index existed (0-100%)
+    migs.avg_user_impact                                        AS estimated_improvement_pct,
+
+    -- How many times a query needed an index seek that this index would satisfy
     migs.user_seeks,
+
+    -- How many times a query did a scan that this index would reduce
     migs.user_scans,
-    migs.avg_user_impact,
-    'CREATE INDEX [IX_' + OBJECT_NAME(mid.object_id) + '_'
-        + REPLACE(REPLACE(REPLACE(
-            ISNULL(mid.equality_columns, '') + 
-            ISNULL('_' + mid.inequality_columns, ''), 
-            '[', ''), ']', ''), ', ', '_')
-        + '] ON ' + mid.statement
-        + ' (' + ISNULL(mid.equality_columns, '')
-        + CASE WHEN mid.inequality_columns IS NOT NULL
-               THEN CASE WHEN mid.equality_columns IS NOT NULL 
-                         THEN ', ' ELSE '' END + mid.inequality_columns
-               ELSE '' END + ')'
-        + CASE WHEN mid.included_columns IS NOT NULL
-               THEN ' INCLUDE (' + mid.included_columns + ')'
-               ELSE '' END                 AS suggested_create_index
+
+    -- Database and table
+    DB_NAME(mid.database_id)                                   AS database_name,
+    mid.statement                                               AS table_name,
+
+    -- Columns used in equality predicates (WHERE col = value)
+    -- These become the leading key columns of the index
+    mid.equality_columns,
+
+    -- Columns used in inequality/range predicates (WHERE col > value, BETWEEN, etc.)
+    -- These follow equality columns in the index key
+    mid.inequality_columns,
+
+    -- Columns that should be INCLUDEd (appear in SELECT but not WHERE)
+    -- Adding these eliminates key lookups to the clustered index
+    mid.included_columns,
+
+    -- Generated CREATE INDEX statement — review and adjust name/columns before running
+    -- IMPORTANT: Consolidate with similar existing indexes before creating new ones
+    N'CREATE NONCLUSTERED INDEX '
+        + QUOTENAME(N'IX_missing_' + CONVERT(nvarchar(11), mid.object_id)
+            + N'_' + CONVERT(nvarchar(11), mid.index_handle))
+        + N' ON ' + QUOTENAME(DB_NAME(mid.database_id))
+        + N'.' + QUOTENAME(OBJECT_SCHEMA_NAME(mid.object_id, mid.database_id))
+        + N'.' + QUOTENAME(OBJECT_NAME(mid.object_id, mid.database_id))
+        + N' (' + cols.key_columns + N')'
+        + CASE WHEN cols.included_columns IS NOT NULL
+               THEN N' INCLUDE (' + cols.included_columns + N')' ELSE N'' END
+        + N' WITH (ONLINE = ON);'                               AS suggested_create_index,
+    N'ONLINE ONLY: verify edition and index-type support; no offline fallback'
+                                                                AS execution_requirement
+
 FROM sys.dm_db_missing_index_details mid
-JOIN sys.dm_db_missing_index_groups mig   ON mid.index_handle = mig.index_handle
-JOIN sys.dm_db_missing_index_group_stats migs ON mig.index_group_handle = migs.group_handle
+JOIN sys.dm_db_missing_index_groups mig
+    ON mid.index_handle = mig.index_handle
+JOIN sys.dm_db_missing_index_group_stats migs
+    ON mig.index_group_handle = migs.group_handle
+
+-- Rebuild lists from individual names, not comma-splitting DMV display strings.
+OUTER APPLY (
+    SELECT
+        STUFF((SELECT N', ' + QUOTENAME(c.column_name)
+               FROM sys.dm_db_missing_index_columns(mid.index_handle) AS c
+               WHERE c.column_usage IN ('EQUALITY', 'INEQUALITY')
+               ORDER BY CASE c.column_usage WHEN 'EQUALITY' THEN 0 ELSE 1 END, c.column_id
+               FOR XML PATH(N''), TYPE).value(N'.', N'nvarchar(max)'), 1, 2, N'') AS key_columns,
+        STUFF((SELECT N', ' + QUOTENAME(c.column_name)
+               FROM sys.dm_db_missing_index_columns(mid.index_handle) AS c
+               WHERE c.column_usage = 'INCLUDE'
+               ORDER BY c.column_id
+               FOR XML PATH(N''), TYPE).value(N'.', N'nvarchar(max)'), 1, 2, N'') AS included_columns
+) AS cols
+
+-- Filter to current database only
 WHERE mid.database_id = DB_ID()
+
 ORDER BY impact_score DESC;
 ```
 
@@ -66,6 +142,21 @@ Fragmentation degrades performance by forcing SQL Server to read more pages for 
 
 **Script:** `../scripts/index-fragmentation.sql`
 
+**Statistics proposals are review-only mutations:** REORGANIZE does not update
+statistics, but fragmentation alone does not establish a need to update them.
+Inspect statistics age, sampling and histogram first in the confirmed database.
+Require exact-target DBA approval of the database, schema, table and statistic
+and ALTER on the target table; monitoring permission alone is insufficient.
+The generated proposal covers all statistics on that table: prefer a reviewed named
+statistic unless the DBA explicitly approves that table-wide scope. Never execute
+every returned proposal automatically. Review workload I/O/CPU, tempdb use and
+recompilation/plan changes; FULLSCAN reads all rows and needs separate justification.
+Rehearse in staging, schedule a maintenance window, capture statistics/histogram
+and query-performance baselines, and agree on monitoring, stop criteria and a
+DBA-owned recovery plan. On errors or regressions, stop further maintenance and
+consult the DBA. There is no universal rollback of statistics or plan changes;
+these examples cannot restore previous histograms or the plan cache.
+
 ```sql
 SELECT
     s.name                              AS schema_name,
@@ -75,15 +166,30 @@ SELECT
     ROUND(ips.avg_fragmentation_in_percent, 1) AS fragmentation_pct,
     ips.page_count,
     CASE
-        WHEN ips.avg_fragmentation_in_percent > 30  THEN 'REBUILD'
-        WHEN ips.avg_fragmentation_in_percent > 10  THEN 'REORGANIZE'
+        WHEN ips.avg_fragmentation_in_percent > 30 THEN 'REBUILD'
+        WHEN ips.avg_fragmentation_in_percent > 10 THEN 'REORGANIZE'
         ELSE 'SKIP'
-    END                                 AS recommended_action,
-    'ALTER INDEX [' + i.name + '] ON [' + s.name + '].[' + o.name + '] '
-        + CASE
-            WHEN ips.avg_fragmentation_in_percent > 30 THEN 'REBUILD WITH (ONLINE = ON);'
-            ELSE 'REORGANIZE;'
-          END                           AS maintenance_statement
+    END                                                         AS recommended_action,
+
+    -- Proposed T-SQL only: exact-target DBA review required; never auto-execute
+    -- Validate ONLINE support and locking impact; do not silently switch to offline rebuild
+    CASE
+        WHEN ips.avg_fragmentation_in_percent > 30 THEN
+            N'ALTER INDEX ' + QUOTENAME(i.name) + N' ON ' + QUOTENAME(DB_NAME())
+            + N'.' + QUOTENAME(s.name) + N'.' + QUOTENAME(o.name)
+            + N' REBUILD WITH (ONLINE = ON, FILLFACTOR = 80);'
+        WHEN ips.avg_fragmentation_in_percent > 10 THEN
+            N'ALTER INDEX ' + QUOTENAME(i.name) + N' ON ' + QUOTENAME(DB_NAME())
+            + N'.' + QUOTENAME(s.name) + N'.' + QUOTENAME(o.name)
+            + N' REORGANIZE;'
+        ELSE '-- No action needed'
+    END                                                         AS maintenance_statement,
+    -- Separate proposal: identifiers must never be embedded in generated line comments.
+    CASE WHEN ips.avg_fragmentation_in_percent > 10
+               AND ips.avg_fragmentation_in_percent <= 30 THEN
+        N'UPDATE STATISTICS ' + QUOTENAME(DB_NAME())
+        + N'.' + QUOTENAME(s.name) + N'.' + QUOTENAME(o.name) + N';'
+    END AS proposed_statistics_sql
 FROM sys.dm_db_index_physical_stats(DB_ID(), NULL, NULL, NULL, 'SAMPLED') ips
 JOIN sys.indexes i   ON ips.object_id = i.object_id AND ips.index_id = i.index_id
 JOIN sys.objects o   ON i.object_id = o.object_id
@@ -100,20 +206,25 @@ ORDER BY ips.avg_fragmentation_in_percent DESC;
 |---------------|--------|-----|
 | < 10% | Skip | Not worth the overhead |
 | 10–30% | `REORGANIZE` | Online, incremental, low overhead |
-| > 30% | `REBUILD` | More thorough; use `ONLINE = ON` on Enterprise Edition |
+| > 30% | `REBUILD` | More thorough; verify ONLINE support for the exact edition, index and column types |
 
 **Notes:**
-- `REBUILD` updates statistics automatically; `REORGANIZE` does not (run `UPDATE STATISTICS` separately)
-- `ONLINE = ON` requires Enterprise Edition — table stays accessible during rebuild
+- `REBUILD` updates its index statistics automatically; `REORGANIZE` does not. Review any separate `UPDATE STATISTICS` proposal under the local gates above; it is not an automatic follow-up.
+- Validate `ONLINE = ON` support for the edition and index type; it can still block
 - Use `SAMPLED` mode (not `DETAILED`) for DMV query — much faster on large tables
 
 ---
 
 ## 3. Unused Indexes
 
-Indexes that are never read but still incur write overhead on every INSERT/UPDATE/DELETE. These are pure waste.
+Indexes that are never read but still incur write overhead on every INSERT/UPDATE/DELETE. Treat them as candidates requiring workload and constraint review.
 
 **Script:** `../scripts/unused-indexes.sql`
+
+REVIEW-ONLY is an intentional non-SQL prefix: keep it in exported proposals.
+A human DBA must prepare a separate, reviewed statement before any DROP. Never run
+saved report output as a script or remove markers in bulk. Names may contain newlines;
+QUOTENAME preserves them, so identifiers must never be embedded in line comments.
 
 ```sql
 SELECT
@@ -128,9 +239,10 @@ SELECT
     ius.last_user_seek,
     ius.last_user_scan,
     ius.last_user_lookup,
-    -- Commented out for safety — review before executing
-    '-- DROP INDEX [' + i.name + '] ON [' + s.name + '].[' + o.name + '];'
-                            AS drop_statement
+    -- Proposal only: exact-target DBA review, dependency checks and recovery plan required
+    N'REVIEW-ONLY: DROP INDEX ' + QUOTENAME(i.name) + N' ON ' + QUOTENAME(DB_NAME())
+        + N'.' + QUOTENAME(s.name) + N'.' + QUOTENAME(o.name) + N';'
+                            AS proposed_drop_statement
 FROM sys.dm_db_index_usage_stats ius
 JOIN sys.indexes i  ON ius.object_id = i.object_id AND ius.index_id = i.index_id
 JOIN sys.objects o  ON i.object_id = o.object_id
@@ -140,7 +252,10 @@ WHERE ius.database_id = DB_ID()
   AND ius.user_scans   = 0
   AND ius.user_lookups = 0
   AND ius.user_updates > 0
-  AND i.type_desc != 'CLUSTERED'   -- Never drop the clustered index this way
+  AND i.type_desc = 'NONCLUSTERED'
+  AND i.is_primary_key = 0
+  AND i.is_unique_constraint = 0
+  AND i.is_unique = 0             -- Uniqueness may be a business invariant
   AND o.is_ms_shipped = 0
 ORDER BY ius.user_updates DESC;
 ```

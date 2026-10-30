@@ -5,12 +5,26 @@
 -- These are candidates for removal to improve write performance.
 -- Requires: VIEW DATABASE STATE permission
 -- Target:   SQL Server 2016+
--- Usage:    sqlcmd -S <server> -U <user> -P <pass> -d <dbname> -i unused-indexes.sql
+-- Usage:    sqlcmd -S <server> -E -d <dbname> -i unused-indexes.sql
 --
 -- ⚠️  IMPORTANT: Usage stats reset when SQL Server restarts.
 --     Only use this analysis after the server has been running for
 --     a representative period (ideally 30+ days including monthly batch jobs).
 -- ============================================================
+
+-- Require exact-target DBA review of server, database, schema, table and index before
+-- executing any proposal. Use least privilege (ALTER on the target table), check
+-- constraints, query hints and other dependencies, and test in staging with a recovery
+-- plan. Never automatically execute returned SQL. Capture index definitions before
+-- changes; budget locks, transaction log, disk/tempdb capacity and a maintenance window.
+-- Check ONLINE support for the edition and index type; online operations still take locks.
+-- Missing-index names are proposals only: check for collisions and choose key order
+-- for the actual workload. Catalog visibility may be limited; NULL output is not approval.
+
+-- REVIEW-ONLY is an intentional non-SQL prefix: keep it in exported proposals.
+-- A human DBA must prepare a separate, reviewed statement before any DROP. Never run
+-- saved report output as a script or remove markers in bulk. Names may contain newlines;
+-- QUOTENAME preserves them, so identifiers must never be embedded in line comments.
 
 SELECT
     s.name                                                      AS schema_name,
@@ -45,9 +59,10 @@ SELECT
      WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id
        AND ic.is_included_column = 0)                          AS key_column_count,
 
-    -- Safe to copy and un-comment after verifying the index is truly unused:
-    '-- DROP INDEX [' + i.name + '] ON [' + s.name + '].[' + o.name + '];'
-                                                                AS drop_statement_commented_for_safety
+    -- Proposal only: DBA must verify exact target, dependencies and recovery before use:
+    N'REVIEW-ONLY: DROP INDEX ' + QUOTENAME(i.name) + N' ON ' + QUOTENAME(DB_NAME())
+        + N'.' + QUOTENAME(s.name) + N'.' + QUOTENAME(o.name) + N';'
+                                                                AS proposed_drop_statement
 
 FROM sys.dm_db_index_usage_stats ius
 JOIN sys.indexes i
@@ -62,7 +77,8 @@ WHERE ius.database_id = DB_ID()
   AND ius.user_scans   = 0      -- Never used for a scan
   AND ius.user_lookups = 0      -- Never used for a lookup
   AND ius.user_updates > 0      -- But has been written to (not zero traffic)
-  AND i.type_desc != 'CLUSTERED'        -- Never drop the clustered index this way
+  AND i.type_desc = 'NONCLUSTERED'        -- Never drop the clustered index this way
+  AND i.is_unique = 0                   -- Preserve unique business invariants
   AND i.is_primary_key = 0              -- Never drop primary key indexes
   AND i.is_unique_constraint = 0        -- Be cautious with unique constraints
   AND o.is_ms_shipped = 0               -- Skip system objects
@@ -82,10 +98,9 @@ ORDER BY ius.user_updates DESC;   -- Sort by write cost (highest overhead first)
 -- 3. Check query hints: Some queries may explicitly hint this index:
 --    SELECT * FROM sys.sql_modules WHERE definition LIKE '%IX_YourIndexName%'
 --
--- 4. Disable before dropping (can re-enable if something breaks):
---    ALTER INDEX [IX_Name] ON [schema].[table] DISABLE;
---    -- Monitor for 1-2 weeks before:
---    DROP INDEX [IX_Name] ON [schema].[table];
+-- 4. Rehearse changes in staging first. DISABLE is not an instant undo:
+--    it can break index hints, and restoring availability requires a rebuild.
+--    Do not use disabling in production as a harmless trial.
 --
 -- 5. Script the index first (in case you need to recreate it):
 --    Use SSMS: right-click index → Script Index As → CREATE To

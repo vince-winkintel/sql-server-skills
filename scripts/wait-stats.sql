@@ -4,7 +4,7 @@
 -- The dominant wait type identifies the category of your performance problem.
 -- Requires: VIEW SERVER STATE permission
 -- Target:   SQL Server 2016+
--- Usage:    sqlcmd -S <server> -U <user> -P <pass> -d master -i wait-stats.sql
+-- Usage:    sqlcmd -S <server> -E -d master -i wait-stats.sql
 -- ============================================================
 
 -- Calculate total wait time (excluding benign/idle waits) for percentage calculation
