@@ -55,6 +55,17 @@ Comprehensive SQL Server skill for AI agents. Covers performance diagnostics, in
 - **SQL Server 2016+** — All DMV queries target compatibility level 130+
 - **Permissions** — `VIEW SERVER STATE` for most DMV queries; operation-specific least privilege and exact-target DBA review for changes
 
+Identify whether the operator uses Go sqlcmd or ODBC sqlcmd before choosing
+variant-specific flags. Go sqlcmd offers `--ascii` for readable diagnostic tables
+and `-j` / `--raw-errors` to retain the `mssql: ` error prefix; neither changes
+authentication. `-F` selects the certificate hostname, not the output format.
+Use YAML for `--sqlconfig` (an extension must be `.yaml` or `.yml`). With Go
+sqlcmd, `-G` without a username selects `ActiveDirectoryDefault`; use it only
+when the operator explicitly selects that identity flow. Keep the explicit
+authentication setup below. Feature minima and source-backed details are in the
+diagnostics module's optional [Go sqlcmd reference](sqlserver-diagnostics/references/go-sqlcmd.md).
+Existing workflows do not require these optional features.
+
 ---
 
 ## Quick Connect
@@ -89,6 +100,8 @@ sqlcmd -S "$SQL_SERVER" "${SQL_AUTH[@]:?Select authentication first}" -d master 
 # Run with output to file
 sqlcmd -S "$SQL_SERVER" "${SQL_AUTH[@]:?Select authentication first}" -d master -i scripts/wait-stats.sql -o results.txt -s "," -W
 ```
+
+`-s ","` separates columns; it does not produce quoted or escaped CSV.
 
 SQL authentication requires a nonempty, exported `SQLCMDPASSWORD` provisioned outside
 this agent session. If it is absent or empty, stop; never type a password into a prompt.

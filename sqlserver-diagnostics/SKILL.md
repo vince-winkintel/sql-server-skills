@@ -7,6 +7,12 @@ description: Identify SQL Server performance bottlenecks using DMV queries. Cove
 
 Use this skill when a SQL Server instance is slow, queries are timing out, or you need to identify the source of a performance problem. Start here before diving into indexes or execution plans.
 
+For operator-run Go sqlcmd diagnostics, see the optional
+[query output and authentication reference](references/go-sqlcmd.md). It includes
+a self-contained read-only query, explicit authentication selection, feature
+minima, and source evidence. Distinguish Go and ODBC sqlcmd before choosing flags;
+the DMV workflows below do not require the optional Go output features.
+
 ---
 
 ## Recommended Workflow
