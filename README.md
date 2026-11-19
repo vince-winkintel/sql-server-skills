@@ -87,9 +87,13 @@ Claude.ai requires a zip containing exactly one `SKILL.md`. Download the pre-bui
 
 The zip contains a single merged `SKILL.md` combining all 7 sub-skills into one comprehensive SQL Server reference.
 
-The builder does not bundle `references/` files or SQL scripts. For the optional
-Go sqlcmd reference, copy `sqlserver-diagnostics/` with its `references/` directory
-intact; that reference includes a standalone query and authentication setup.
+The builder does not bundle `references/` files or SQL scripts. The merged skill
+keeps authentication, version minima and output-safety essentials inline; use its
+inline SQL examples. Script workflows and the optional Go sqlcmd reference require
+the manual repository install (Option 2), not an additional Claude.ai upload.
+For a selective filesystem install, copy `sqlserver-diagnostics/` including its
+`references/` directory into your agent's skill search directory; the reference
+includes a standalone query and authentication setup.
 
 **Build it yourself:**
 
@@ -116,7 +120,8 @@ operator-configured identity. For SQL authentication, use the explicit setup in
 [SKILL.md](./SKILL.md#quick-connect); never put passwords in command arguments.
 Identify Go versus ODBC sqlcmd before adding variant-specific flags. See the
 [Go sqlcmd reference](./sqlserver-diagnostics/references/go-sqlcmd.md) for optional
-table output and error handling. Package release history is in [VERSION](./VERSION).
+table output and error handling. Releases are identified by Git tags; the
+[unreleased Go sqlcmd audit](docs/go-sqlcmd-audit.md) records the pinned source review.
 
 ---
 

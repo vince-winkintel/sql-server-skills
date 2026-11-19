@@ -17,7 +17,8 @@ openclaw:
         fallback: Integrated authentication (sqlcmd -E, no SQL password required)
       - name: SQLCMDPASSWORD
         description: >
-          SQL authentication password read directly by sqlcmd from the environment.
+          SQL authentication password read by sqlcmd from the environment after
+          the explicit SQLCMDUSER setup below prevents Go sqlconfig replacement.
           Not required when using Windows Authentication (-E flag).
           Must already be securely provisioned by the operator. Never ask for, print,
           or persist this value, including in skill files, shell history or logs.
@@ -56,22 +57,37 @@ Comprehensive SQL Server skill for AI agents. Covers performance diagnostics, in
 - **Permissions** — `VIEW SERVER STATE` for most DMV queries; operation-specific least privilege and exact-target DBA review for changes
 
 Identify whether the operator uses Go sqlcmd or ODBC sqlcmd before choosing
-variant-specific flags. Go sqlcmd offers `--ascii` for readable diagnostic tables
-and `-j` / `--raw-errors` to retain the `mssql: ` error prefix; neither changes
-authentication. `-F` selects the certificate hostname, not the output format.
-Use YAML for `--sqlconfig` (an extension must be `.yaml` or `.yml`). With Go
-sqlcmd, `-G` without a username selects `ActiveDirectoryDefault`; use it only
-when the operator explicitly selects that identity flow. Keep the explicit
-authentication setup below. Feature minima and source-backed details are in the
-diagnostics module's optional [Go sqlcmd reference](sqlserver-diagnostics/references/go-sqlcmd.md).
-Existing workflows do not require these optional features.
+variant-specific flags. **Go sqlcmd 1.11.0 or later** is required for `--ascii`
+and `-j` / `--raw-errors` (retains the `mssql: ` error prefix, not a redaction
+control). `-F` selects the certificate hostname, not the output format.
+ASCII tables buffer rows and can silently truncate cells with `...`; use only
+small, narrow results, never query text, XML plans or generated DDL. `-y`, `-Y`
+and `-h` are ignored in ASCII mode. `-w` / `SQLCMDCOLWIDTH` controls width;
+otherwise stdout's terminal width applies even with `-o file`. Increasing width
+does not guarantee complete values. Keep the default formatter for existing
+workflows, including missing-index output with `-y 0 -w 65535`.
+
+`--sqlconfig` belongs to the modern subcommand CLI (subcommand first, such as
+`sqlcmd config` or `sqlcmd query`), not the legacy `sqlcmd -S ... -Q/-i` forms
+used here. Its file contains YAML; **Go sqlcmd 1.11.0 or later** rejects suffixes
+other than `.yaml` / `.yml` (case-insensitive). A suffix-free basename such as
+`sqlconfig` is allowed; `.sqlconfig` is a suffix and is rejected.
+In **Go sqlcmd 1.11.0 or later**, `-G` without `-U` selects
+`ActiveDirectoryDefault` (an Azure credential chain); older versions selected
+`ActiveDirectoryIntegrated`. Use only an operator-selected identity flow; do not
+add `-G` to the authentication setup below or use it as a credential fallback.
+These optional features do not raise the minimum for existing DMV workflows.
+[Microsoft's pinned source and feature history](https://github.com/microsoft/go-sqlcmd/blob/a97013a80b01f3aaac4fb17e9ef422283f15cb2f/CHANGELOG.md).
+The optional `sqlserver-diagnostics/references/go-sqlcmd.md` in a manual repository
+install adds detail; the single-file Claude.ai ZIP omits it and SQL scripts.
+Use inline SQL in the merged sections, or the manual install for script workflows.
 
 ---
 
 ## Quick Connect
 
 Prefer integrated authentication (`-E`) with an operator-configured identity. For SQL
-authentication, sqlcmd reads an already securely provisioned `SQLCMDPASSWORD` directly;
+authentication, sqlcmd reads an already securely provisioned `SQLCMDPASSWORD`;
 never expand it into arguments. Never ask for, print, or persist passwords. Do not
 create password files, use shell tracing, or dump the environment. If no secure
 authentication is available, stop and let the operator configure it outside the agent.
@@ -87,7 +103,8 @@ SQL_AUTH=(-E)
 ```bash
 # SQL Authentication: SQLCMDPASSWORD must already be exported securely
 [ -n "${SQLCMDPASSWORD:-}" ] || { echo 'SQLCMDPASSWORD not provisioned or empty' >&2; exit 1; }
-SQL_AUTH=(-U "$SQL_USER")
+export SQLCMDUSER="${SQL_USER:?Set the operator-selected SQL login}"
+SQL_AUTH=(-U "$SQLCMDUSER")
 ```
 
 ```bash
@@ -105,7 +122,12 @@ sqlcmd -S "$SQL_SERVER" "${SQL_AUTH[@]:?Select authentication first}" -d master 
 
 SQL authentication requires a nonempty, exported `SQLCMDPASSWORD` provisioned outside
 this agent session. If it is absent or empty, stop; never type a password into a prompt.
-Re-run the presence check before SQL-auth workflows if the environment has changed.
+Re-run the setup before SQL-auth workflows if the environment has changed.
+Go sqlcmd legacy startup reads `~/.sqlcmd/sqlconfig`: a current basic-auth context
+can overwrite an exported password when `SQLCMDUSER` is empty, before `-U` is
+parsed. Exporting the selected login as `SQLCMDUSER` prevents that replacement;
+`-U` alone does not. Do not inspect or change stored credentials to work around it.
+[Initialization source](https://github.com/microsoft/go-sqlcmd/blob/a97013a80b01f3aaac4fb17e9ef422283f15cb2f/cmd/modern/main.go#L61-L100).
 
 ### Compatibility
 

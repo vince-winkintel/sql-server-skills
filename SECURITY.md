@@ -36,14 +36,21 @@ sqlcmd -S "$SQL_SERVER" -E -d master -i scripts/wait-stats.sql
 ```
 
 When SQL authentication is necessary, use only an **already securely provisioned**
-`SQLCMDPASSWORD`; sqlcmd reads it directly from its environment. It must be exported
+`SQLCMDPASSWORD`; sqlcmd reads it from its environment. It must be exported
 and nonempty. The legacy `SQL_PASSWORD` name is no longer read: update secure
 provisioning outside the agent, never copy or type its value into this session:
 
 ```bash
 [ -n "${SQLCMDPASSWORD:-}" ] || { echo 'SQLCMDPASSWORD not provisioned or empty' >&2; exit 1; }
-sqlcmd -S "$SQL_SERVER" -U "$SQL_USER" -d master -i scripts/wait-stats.sql
+export SQLCMDUSER="${SQL_USER:?Set the operator-selected SQL login}"
+sqlcmd -S "$SQL_SERVER" -U "$SQLCMDUSER" -d master -i scripts/wait-stats.sql
 ```
+
+Go sqlcmd initializes legacy invocations from `~/.sqlcmd/sqlconfig` before parsing
+`-U`. A current basic-auth context can replace `SQLCMDPASSWORD` if `SQLCMDUSER`
+is empty. The setup exports the selected login to prevent this replacement;
+`-U` alone is insufficient. Re-run the setup if the environment changes.
+[Pinned initialization source](https://github.com/microsoft/go-sqlcmd/blob/a97013a80b01f3aaac4fb17e9ef422283f15cb2f/cmd/modern/main.go#L61-L100).
 
 Never ask for, print, or persist a password. Never expand passwords into command
 arguments, write `.env`/skill files, enable shell tracing, or dump the environment.
