@@ -9,11 +9,14 @@ from pathlib import Path
 import re
 import subprocess
 import sqlite3
+import sys
 import unittest
 import tempfile
 import zipfile
 
 ROOT = Path(os.environ.get('SECURITY_TEST_ROOT', Path(__file__).resolve().parents[1]))
+GO_REFERENCE = 'sqlserver-diagnostics/references/go-sqlcmd.md'
+AUTH_FILES = ('SKILL.md', 'SECURITY.md', GO_REFERENCE)
 
 
 def read(name):
@@ -65,9 +68,13 @@ class SecurityExamples(unittest.TestCase):
         setups = [b for b in root_blocks if 'SQL_AUTH=(' in b]
         self.assertEqual(len(setups), 2)
         count = 0
-        for name in ('SKILL.md', 'README.md', 'SECURITY.md'):
+        for name in ('SKILL.md', 'README.md', 'SECURITY.md', GO_REFERENCE):
+            blocks = re.findall(r'```bash\n(.*?)```', read(name), re.S)
+            local_setups = [b for b in blocks if 'SQL_AUTH=(' in b]
             for command in re.findall(r'^sqlcmd .*$', read(name).replace('\\\n', ''), re.M):
-                choices = setups if 'SQL_AUTH[' in command else ['']
+                choices = local_setups if 'SQL_AUTH[' in command else ['']
+                if '-U' in command:
+                    choices = [next(b for b in blocks if command in b).split(command)[0]]
                 for setup in choices:
                     for status in (0, 17):
                         with self.subTest(file=name, command=command, setup=setup, status=status):
@@ -86,13 +93,17 @@ class SecurityExamples(unittest.TestCase):
                                 script = re.search(r'-i (\S+)', command).group(1)
                                 self.assertTrue((ROOT / script).is_file(), script)
                                 expected += ['-i', script]
+                            if '-Q' in argv:
+                                expected += ['-Q', 'SELECT @@SPID AS session_id;']
                             if '-o' in argv:
                                 expected += ['-o', 'results.txt', '-s', ',', '-W']
                             for flag in ('-b', '-y', '-w'):
                                 if flag in argv:
                                     expected += [flag]
                                     if flag != '-b':
-                                        expected += ['0' if flag == '-y' else '65535']
+                                        expected += [re.search(re.escape(flag) + r' (\d+)', command).group(1)]
+                            if '--ascii' in argv:
+                                expected += ['--ascii']
                             self.assertEqual(argv, expected)
                             self.assertFalse('-W' in argv and '-y' in argv)
                             count += 1
@@ -100,10 +111,11 @@ class SecurityExamples(unittest.TestCase):
         for path in (ROOT / 'scripts').glob('*.sql'):
             self.assertNotRegex(path.read_text(), r'\bsqlcmd[^\n]*\s-P\b')
         self.assertNotIn('name: SQL_PASSWORD', read('SKILL.md'))
-        command = next(c for c in read('SKILL.md').splitlines() if c.startswith('sqlcmd') and 'SQL_AUTH' in c)
-        result = subprocess.run(['bash', '-c', recorder + command], env=env, text=True, capture_output=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(result.stdout, '')
+        for filename in ('SKILL.md', GO_REFERENCE):
+            command = next(c for c in read(filename).splitlines() if c.startswith('sqlcmd') and 'SQL_AUTH' in c)
+            result = subprocess.run(['bash', '-c', recorder + command], env=env, text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, '')
 
     def test_generated_identifiers(self):
         for filename in INDEX_FILES:
@@ -406,7 +418,7 @@ class SecurityExamples(unittest.TestCase):
 
     def test_sql_auth_stops_before_transport_without_nonempty_password(self):
         recorder = "sqlcmd() { printf 'TRANSPORT\\n'; };\n"
-        for filename in ('SKILL.md', 'SECURITY.md'):
+        for filename in AUTH_FILES:
             blocks = re.findall(r'```bash\n(.*?)```', read(filename), re.S)
             block = next(b for b in blocks if '-U' in b)
             for state in ('unset', 'empty', 'legacy', 'provisioned'):
@@ -433,6 +445,83 @@ class SecurityExamples(unittest.TestCase):
                         self.assertNotEqual(result.returncode, 0)
                         self.assertNotIn('TRANSPORT', result.stdout)
                         self.assertIn('SQLCMDPASSWORD', result.stderr)
+
+    def test_sql_auth_context_precedence_and_login_gate(self):
+        # External recording executable: verifies EXPORT, not just shell variables.
+        # Models only main.go:92-96 at a97013a; not a real sqlconfig parser/client.
+        stub = '''import json, os, pathlib, sys
+args = sys.argv[1:]
+user = os.environ.get('SQLCMDUSER', '')
+password = os.environ.get('SQLCMDPASSWORD', '')
+replaced = False
+context = pathlib.Path(os.environ['HOME']) / '.sqlcmd' / 'sqlconfig'
+if context.exists():
+    basic = json.loads(context.read_text())
+    if basic['user'] and basic['password'] and not user:
+        user, password = basic['user'], basic['password']
+        replaced = True
+print(json.dumps({'argv': args, 'user': user, 'context_replaced': replaced,
+                  'password_preserved': password == 'synthetic-secret'}))
+sys.exit(int(os.environ.get('FIXTURE_STATUS', '0')))
+'''
+        with tempfile.TemporaryDirectory(prefix='sql-auth-context-') as temporary:
+            work = Path(temporary)
+            bindir = work / 'bin'
+            bindir.mkdir()
+            executable = bindir / 'sqlcmd'
+            executable.write_text('#!' + sys.executable + '\n' + stub)
+            executable.chmod(0o755)
+            home = work / 'home'
+            (home / '.sqlcmd').mkdir(parents=True)
+            config = home / '.sqlcmd/sqlconfig'
+            env = {'PATH': str(bindir), 'HOME': str(home),
+                   'SQL_SERVER': 'fixture server', 'SQL_DATABASE': 'fixture database',
+                   'SQL_USER': 'fixture user', 'SQLCMDPASSWORD': 'synthetic-secret'}
+            for has_context in (False, True):
+                if has_context:
+                    config.write_text(json.dumps({'user': 'context user', 'password': 'context-secret'}))
+                # Negative control: stub actually detects the original unsafe setup.
+                control = subprocess.run(['/bin/bash', '-c', 'sqlcmd -U "$SQL_USER"'],
+                                         env=env, text=True, capture_output=True)
+                self.assertEqual(control.returncode, 0, control.stderr)
+                self.assertEqual(json.loads(control.stdout)['context_replaced'], has_context)
+                for filename in AUTH_FILES:
+                    blocks = re.findall(r'```bash\n(.*?)```', read(filename), re.S)
+                    block = next(b for b in blocks if '-U' in b)
+                    if 'SQL_AUTH=(' in block:
+                        block += next(b for b in blocks if re.search(r'^sqlcmd ', b, re.M))
+                    for inherited_user in (None, '', 'unrelated inherited login'):
+                        for status in (0, 17):
+                            with self.subTest(file=filename, context=has_context,
+                                              inherited_user=inherited_user, status=status):
+                                run_env = dict(env, FIXTURE_STATUS=str(status))
+                                if inherited_user is not None:
+                                    run_env['SQLCMDUSER'] = inherited_user
+                                result = subprocess.run(['/bin/bash', '-c', block], env=run_env,
+                                                        input='stdin sentinel', text=True, capture_output=True)
+                                self.assertEqual(result.returncode, status, result.stderr)
+                                for line in result.stdout.splitlines():
+                                    call = json.loads(line)
+                                    self.assertEqual(call['user'], 'fixture user')
+                                    self.assertFalse(call['context_replaced'])
+                                    self.assertTrue(call['password_preserved'])
+                                    self.assertNotIn('-P', call['argv'])
+                                    self.assertNotIn('-E', call['argv'])
+                                    self.assertEqual(call['argv'][call['argv'].index('-U') + 1], 'fixture user')
+                                self.assertTrue(result.stdout)
+                                for secret in ('synthetic-secret', 'context-secret', 'stdin sentinel'):
+                                    self.assertNotIn(secret, result.stdout + result.stderr)
+                    for missing_login in (None, ''):
+                        run_env = dict(env, SQLCMDUSER='unrelated inherited login')
+                        if missing_login is None:
+                            run_env.pop('SQL_USER')
+                        else:
+                            run_env['SQL_USER'] = missing_login
+                        result = subprocess.run(['/bin/bash', '-c', block], env=run_env,
+                                                input='stdin sentinel', text=True, capture_output=True)
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertEqual(result.stdout, '')
+                        self.assertIn('SQL_USER', result.stderr)
 
     def test_drop_output_is_review_only(self):
         for filename in ('scripts/unused-indexes.sql', 'sqlserver-indexes/SKILL.md'):
@@ -474,7 +563,9 @@ class SecurityExamples(unittest.TestCase):
             for name in ('.gitattributes', 'README.md', 'SECURITY.md', 'LICENSE',
                          'SKILL.md', 'scripts/build-claude-skill.sh',
                          'scripts/missing-indexes.sql', 'docs/security-audit-1.md',
+                         'docs/go-sqlcmd-audit.md',
                          'tests/test_security_examples.py',
+                         'sqlserver-diagnostics/SKILL.md', GO_REFERENCE,
                          'sqlserver-indexes/SKILL.md', 'sqlserver-indexes/references/index-strategies.md'):
                 target = fixture / name
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -485,10 +576,48 @@ class SecurityExamples(unittest.TestCase):
                 names = archive.getnames()
             self.assertFalse(any(n == 'docs' or n == 'tests' or n.startswith(('docs/', 'tests/')) for n in names), names)
             for name in ('SKILL.md', 'scripts/missing-indexes.sql', 'sqlserver-indexes/SKILL.md',
-                         'sqlserver-indexes/references/index-strategies.md'):
+                         'sqlserver-indexes/references/index-strategies.md',
+                         'sqlserver-diagnostics/SKILL.md', GO_REFERENCE):
                 self.assertIn(name, names)
             for name in ('README.md', 'SECURITY.md', 'LICENSE', 'scripts/build-claude-skill.sh'):
                 self.assertNotIn(name, names)
+            self.assertFalse((ROOT / 'VERSION').exists())
+            self.assertNotIn('VERSION', names)
+            self.assertIn('unreleased candidate', read('docs/go-sqlcmd-audit.md'))
+            self.assertIn('a97013a80b01f3aaac4fb17e9ef422283f15cb2f', read('docs/go-sqlcmd-audit.md'))
+
+    def assert_go_essentials(self, source):
+        source = re.sub(r'\s+', ' ', source)
+        for phrase in ('Go sqlcmd 1.11.0 or later', '--ascii', '--raw-errors',
+                       'silently truncate', '`-y`, `-Y` and `-h`',
+                       'even with `-o file`', 'does not guarantee complete values',
+                       'modern subcommand CLI', 'subcommand first',
+                       'legacy `sqlcmd -S ... -Q/-i`', '`.sqlconfig`',
+                       'ActiveDirectoryDefault', 'ActiveDirectoryIntegrated',
+                       'single-file', 'ZIP omits', 'inline'):
+            self.assertIn(phrase, source)
+        # Supplementary local reference names may remain as code text, but the
+        # one-file ZIP must not link to a missing new Go reference for essentials.
+        self.assertNotRegex(source, r'\]\([^)]*references/go-sqlcmd\.md\)')
+
+    def test_selective_skills_are_self_contained(self):
+        import shutil
+        with tempfile.TemporaryDirectory(prefix='sql-selective-') as temporary:
+            work = Path(temporary)
+            skills = [ROOT / 'sqlserver-diagnostics/SKILL.md']
+            for skill in skills:
+                isolated = work / skill.parent.name
+                shutil.copytree(skill.parent, isolated)
+                source = (isolated / 'SKILL.md').read_text()
+                with self.subTest(skill=skill.parent.name):
+                    if skill.parent.name == 'sqlserver-diagnostics':
+                        self.assert_go_essentials(source)
+                        self.assertTrue((isolated / 'references/go-sqlcmd.md').is_file())
+            root_only = work / 'root-only'
+            root_only.mkdir()
+            shutil.copyfile(ROOT / 'SKILL.md', root_only / 'SKILL.md')
+            source = (root_only / 'SKILL.md').read_text()
+            self.assert_go_essentials(source)
 
     def test_builder_output_paths(self):
         # Exercise zip and Python fallback with actual filesystem artifacts.
@@ -550,6 +679,8 @@ class SecurityExamples(unittest.TestCase):
             for source in [ROOT / 'SKILL.md', *sorted(ROOT.glob('sqlserver-*/SKILL.md'))]:
                 body = source.read_text().split('---', 2)[2].strip()
                 self.assertIn(body, merged, str(source))
+                if source == ROOT / 'SKILL.md' or source.parent.name == 'sqlserver-diagnostics':
+                    self.assert_go_essentials(body)
             self.assertNotRegex(merged, r'(?m)^sqlcmd[^\n]*\s-P\b')
             self.assertIn('QUOTENAME(i.name)', merged)
             self.assertNotRegex(merged, r'(?m)^DBCC FREEPROCCACHE;')

@@ -48,6 +48,7 @@ See [Compared to Existing Marketplace Skills](#compared-to-existing-marketplace-
 
 ### Reference Docs
 
+- [`sqlserver-diagnostics/references/go-sqlcmd.md`](./sqlserver-diagnostics/references/go-sqlcmd.md) — Go sqlcmd diagnostic output, explicit authentication, configuration, and source-backed compatibility notes
 - [`sqlserver-indexes/references/index-strategies.md`](./sqlserver-indexes/references/index-strategies.md) — Composite key ordering, filtered indexes, columnstore, maintenance scheduling
 - [`sqlserver-execution-plans/references/plan-operators.md`](./sqlserver-execution-plans/references/plan-operators.md) — Full operator reference table with cost profiles and fix patterns
 - [`sqlserver-query-optimization/references/optimization-patterns.md`](./sqlserver-query-optimization/references/optimization-patterns.md) — Before/after SQL examples for 12 major anti-patterns
@@ -86,6 +87,14 @@ Claude.ai requires a zip containing exactly one `SKILL.md`. Download the pre-bui
 
 The zip contains a single merged `SKILL.md` combining all 7 sub-skills into one comprehensive SQL Server reference.
 
+The builder does not bundle `references/` files or SQL scripts. The merged skill
+keeps authentication, version minima and output-safety essentials inline; use its
+inline SQL examples. Script workflows and the optional Go sqlcmd reference require
+the manual repository install (Option 2), not an additional Claude.ai upload.
+For a selective filesystem install, copy `sqlserver-diagnostics/` including its
+`references/` directory into your agent's skill search directory; the reference
+includes a standalone query and authentication setup.
+
 **Build it yourself:**
 
 ```bash
@@ -101,10 +110,18 @@ bash scripts/build-claude-skill.sh
 # Connect and run a script
 sqlcmd -S "$SQL_SERVER" -E -d master -i scripts/wait-stats.sql
 
-# Run with CSV output to a file
+# Run with comma-separated output to a file (not quoted/escaped CSV)
 sqlcmd -S "$SQL_SERVER" -E -d master \
   -i scripts/top-slow-queries.sql -o results.txt -s "," -W
 ```
+
+These examples explicitly select integrated authentication with an
+operator-configured identity. For SQL authentication, use the explicit setup in
+[SKILL.md](./SKILL.md#quick-connect); never put passwords in command arguments.
+Identify Go versus ODBC sqlcmd before adding variant-specific flags. See the
+[Go sqlcmd reference](./sqlserver-diagnostics/references/go-sqlcmd.md) for optional
+table output and error handling. Releases are identified by Git tags; the
+[unreleased Go sqlcmd audit](docs/go-sqlcmd-audit.md) records the pinned source review.
 
 ---
 

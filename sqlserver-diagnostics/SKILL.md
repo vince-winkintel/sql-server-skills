@@ -7,6 +7,42 @@ description: Identify SQL Server performance bottlenecks using DMV queries. Cove
 
 Use this skill when a SQL Server instance is slow, queries are timing out, or you need to identify the source of a performance problem. Start here before diving into indexes or execution plans.
 
+Distinguish Go and ODBC sqlcmd before choosing flags. **Go sqlcmd 1.11.0 or later**
+is required for `--ascii` and `-j` / `--raw-errors` (preserves the `mssql: ` prefix,
+not a redaction control). ASCII tables buffer rows and can silently truncate
+cells with `...`; use only small, narrow results, never query text, XML plans or
+generated DDL. `-y`, `-Y` and `-h` are ignored in ASCII mode. `-w` / `SQLCMDCOLWIDTH`
+controls width; otherwise stdout's terminal width applies even with `-o file`.
+Increasing width does not guarantee complete values. Keep the default formatter
+for full diagnostic values. `-F` is a certificate hostname, not an output format.
+
+`--sqlconfig` belongs to the modern subcommand CLI (subcommand first), not the
+legacy `sqlcmd -S ... -Q/-i` forms. In **Go sqlcmd 1.11.0 or later**, explicit
+suffixes must be `.yaml` or `.yml` (case-insensitive); suffix-free `sqlconfig` is
+allowed, but `.sqlconfig` is rejected. In **Go sqlcmd 1.11.0 or later**, `-G`
+without `-U` selects `ActiveDirectoryDefault` (an Azure credential chain), whereas
+older versions selected `ActiveDirectoryIntegrated`. Use only an explicitly
+operator-selected identity flow, never a fallback for missing SQL credentials.
+The DMV workflows below do not require these optional features.
+[Microsoft's pinned feature history](https://github.com/microsoft/go-sqlcmd/blob/a97013a80b01f3aaac4fb17e9ef422283f15cb2f/CHANGELOG.md).
+
+The optional `references/go-sqlcmd.md` in this module's filesystem install adds a
+standalone query, authentication examples and source detail. The single-file
+Claude.ai ZIP omits references and SQL scripts; use the inline queries below.
+Script paths require the full manual repository install.
+
+## Authentication selection
+
+Use an operator-selected server/database and least-privileged identity. Prefer
+explicit integrated authentication (`-E`). For SQL authentication, require a
+nonempty, securely exported `SQLCMDPASSWORD`; export `SQLCMDUSER` from the nonempty
+operator-selected `SQL_USER` before using `-U` with that same login. Go sqlcmd can
+otherwise replace the password from its current sqlconfig context before parsing
+`-U`. Never fall back to another identity. Never ask for, print, persist or put
+passwords/tokens in arguments; do not trace the shell or dump the environment.
+Stop for operator provisioning outside the agent if secure authentication is absent.
+[Go initialization source](https://github.com/microsoft/go-sqlcmd/blob/a97013a80b01f3aaac4fb17e9ef422283f15cb2f/cmd/modern/main.go#L61-L100).
+
 ---
 
 ## Recommended Workflow
